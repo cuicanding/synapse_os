@@ -229,7 +229,9 @@ async def api_mission():
 @app.get("/api/tasks")
 async def api_tasks():
     data = get_data()
-    return data.get("tasks", [])
+    tasks = data.get("tasks", [])
+    tasks.sort(key=lambda t: t.get("_mtime", 0), reverse=True)
+    return tasks
 
 @app.get("/api/collaboration")
 async def api_collaboration():

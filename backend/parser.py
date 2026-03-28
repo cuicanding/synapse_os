@@ -54,6 +54,7 @@ class Task:
     domain: str = ""
     iteration_round: str = ""     # e.g. "3" for 第3轮迭代
     iteration_driver: str = ""    # e.g. "Susan（苏珊）"
+    _mtime: float = 0.0          # file modification timestamp
     proposal_content: str = ""    # 提案详情
     task_content: str = ""        # 完整任务描述（包括标题、详细描述、涉及文件等）
     judgment: str = ""            # 团队负责人判断说明
@@ -469,6 +470,7 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
         proposal_content=proposal_content,
         task_content=task_content,
         judgment=judgment,
+        _mtime=filepath.stat().st_mtime,
     )
 
 
