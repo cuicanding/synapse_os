@@ -260,15 +260,18 @@ async def ensure_session(gw_ws, msg_queue, agent_id):
     return key
 
 
-@router.get("/api/chat/sync-session")
-async def sync_from_session(agent_id: str, limit: int = 50):
-    """从 OpenClaw agent session 文件读取最新消息，返回标准化历史。"""
+@router.post("/api/chat/sync-session")
+async def sync_from_session(body: dict):
+    """从 OpenClaw agent session 文件读取消息，去重后追加到频道 JSONL。"""
+    agent_id = body.get("agent_id", "")
     if not agent_id or agent_id not in AGENT_SESSION_KEYS:
         return {"error": f"Unknown agent: {agent_id}"}, 400
 
+    channel_id = f"dm-{agent_id}"
+
     session_dir = os.path.expanduser(f"~/.openclaw-can/agents/{agent_id}/sessions")
     if not os.path.isdir(session_dir):
-        return {"messages": []}
+        return {"synced": 0, "channel_id": channel_id}
 
     # 找最新的 session 文件
     session_files = sorted(
@@ -277,10 +280,10 @@ async def sync_from_session(agent_id: str, limit: int = 50):
         reverse=True,
     )
     if not session_files:
-        return {"messages": []}
+        return {"synced": 0, "channel_id": channel_id}
 
-    # 读取最新 session 文件，从后往前取 limit 条用户/助手消息
-    messages = []
+    # 读取 session 文件中的消息
+    session_messages = []
     latest_path = os.path.join(session_dir, session_files[0])
     with open(latest_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -303,7 +306,7 @@ async def sync_from_session(agent_id: str, limit: int = 50):
         text = _extract_session_text(content)
         if not text or text == "NO_REPLY":
             continue
-        messages.append({
+        session_messages.append({
             "id": entry.get("id", ""),
             "senderId": agent_id if role == "assistant" else "user",
             "senderName": AGENT_DISPLAY_NAMES.get(agent_id, {}).get("name", agent_id) if role == "assistant" else "果爸",
@@ -311,11 +314,36 @@ async def sync_from_session(agent_id: str, limit: int = 50):
             "timestamp": entry.get("timestamp", ""),
             "role": role,
         })
-        if len(messages) >= limit:
+        if len(session_messages) >= 100:
             break
 
-    messages.reverse()  # 恢复时间顺序
-    return {"messages": messages, "session_file": session_files[0]}
+    session_messages.reverse()  # 恢复时间顺序
+
+    # 去重：读取现有 JSONL 中已有的 id
+    safe_id = channel_id.replace("/", "_").replace("\\", "_")
+    jsonl_path = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.jsonl")
+    existing_ids = set()
+    if os.path.isfile(jsonl_path):
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        existing_ids.add(json.loads(line).get("id", ""))
+                    except json.JSONDecodeError:
+                        continue
+
+    # 追加新消息到 JSONL
+    synced = 0
+    with _history_lock:
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            for m in session_messages:
+                if m["id"] and m["id"] not in existing_ids:
+                    f.write(json.dumps(m, ensure_ascii=False) + "\n")
+                    existing_ids.add(m["id"])
+                    synced += 1
+
+    return {"synced": synced, "channel_id": channel_id}
 
 
 def _extract_session_text(content) -> str:

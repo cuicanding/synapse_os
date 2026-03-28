@@ -47,3 +47,4 @@ Error: read ECONNRESET
 15:25:05 [vite-plugin-svelte] /home/cunxiao/synapse_os/frontend/src/views/WorkbenchPanel.svelte:550:20 'syncFromSession' is not defined
 15:25:26 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
 15:25:58 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:26:30 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css

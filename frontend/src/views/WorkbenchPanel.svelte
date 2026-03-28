@@ -437,47 +437,24 @@
   }
 
   async function syncFromSession() {
-    if (!currentChannelId || !currentChannelId.startsWith("dm-")) {
-      // domain 频道暂不支持 session 同步
-      return;
-    }
+    if (!currentChannelId || !currentChannelId.startsWith("dm-")) return;
     var agentId = currentChannelId.replace("dm-", "");
     try {
-      var resp = await fetch("/api/chat/sync-session?agent_id=" + encodeURIComponent(agentId) + "&limit=50");
+      // 后端读 session 文件 → 写入 JSONL
+      var resp = await fetch("/api/chat/sync-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId })
+      });
       if (!resp.ok) return;
       var data = await resp.json();
-      var sessionMsgs = data.messages || [];
-      if (sessionMsgs.length === 0) return;
-
-      // 转换为前端消息格式，去重（按 id）
-      var existingIds = new Set((channelStates[currentChannelId]?.messages || []).map(function(m: any) { return m.id; }));
-      var newMsgs = sessionMsgs.filter(function(m: any) { return m.id && !existingIds.has(m.id); }).map(function(m: any) {
-        return {
-          role: m.role === "user" ? "user" : "turn",
-          type: m.role === "user" ? "user" : "turn",
-          content: m.content || "",
-          response: m.role === "assistant" ? m.content : "",
-          senderId: m.senderId,
-          senderName: m.senderName,
-          timestamp: m.timestamp
-        };
-      });
-
-      if (newMsgs.length === 0) return;
-
-      var existingState = channelStates[currentChannelId] || DEFAULT_CHANNEL_STATE;
-      // 合并后按 timestamp 排序
-      var allMsgs = [...existingState.messages, ...newMsgs].sort(function(a: any, b: any) {
-        return (a.timestamp || "").localeCompare(b.timestamp || "");
-      });
-      channelStates = {
-        ...channelStates,
-        [currentChannelId]: {
-          ...existingState,
-          messages: allMsgs
+      if ((data.synced || 0) > 0) {
+        // 重新 join 频道，从 JSONL 加载最新数据
+        joinedChannels.delete(currentChannelId);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
         }
-      };
-      setTimeout(scrollToBottom, 100);
+      }
     } catch (e) {
       console.error("[chat] syncFromSession failed:", e);
     }
