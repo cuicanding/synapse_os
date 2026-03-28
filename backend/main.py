@@ -29,6 +29,8 @@ CYBER_TEAM_DIR = os.environ.get(
     "CYBER_TEAM_DIR",
     os.path.expanduser("~/.openclaw/workspace-can/cyber-team"),
 )
+SYNAPSE_TOKEN = os.environ.get("SYNAPSE_TOKEN", "")
+AUTH_ENABLED = bool(SYNAPSE_TOKEN)
 WS_DEBOUNCE_MS = 300
 
 connected_clients: list[WebSocket] = []
@@ -843,6 +845,294 @@ async def api_status_difficulty(body: dict):
     if not body.get("difficulty_level"):
         body["difficulty_level"] = body.get("severity", "minor")
     return await api_status_report(body)
+
+
+# ─── Task Detail & Actions ──────────────────────────────────────────────────
+
+@app.get("/api/tasks/{task_id}")
+async def api_task_detail(task_id: str):
+    """Return a single task's full data."""
+    data = get_data()
+    tasks = data.get("tasks", [])
+    for t in tasks:
+        if t.get("id") == task_id:
+            return t
+    return {"error": "Task not found"}, 404
+
+
+@app.patch("/api/tasks/{task_id}/complete")
+async def api_task_complete(task_id: str, body: dict = None):
+    """Mark an in-progress task as complete -> pending-acceptance."""
+    valid, err = _check_transition(task_id, "pending-acceptance")
+    if not valid:
+        return {"success": False, "error": err}, 400
+
+    success, filepath = _update_task_status_in_file(task_id, "pending-acceptance")
+    if not success:
+        return {"success": False, "error": f"Task {task_id} not found"}
+
+    title = _get_task_title(task_id)
+    await broadcast_status({
+        "type": "task_action_required",
+        "task_id": task_id,
+        "action": "accept",
+        "title": title,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    await on_data_changed()
+    return {"success": True, "task_id": task_id, "new_status": "pending-acceptance", "action": "completed"}
+
+
+@app.patch("/api/tasks/{task_id}/archive")
+async def api_task_archive(task_id: str, body: dict = None):
+    """Archive a completed/accepted task."""
+    valid, err = _check_transition(task_id, "archived")
+    if not valid:
+        return {"success": False, "error": err}, 400
+    success, filepath = _update_task_status_in_file(task_id, "archived")
+    if not success:
+        return {"success": False, "error": f"Task {task_id} not found"}
+    await on_data_changed()
+    return {"success": True, "task_id": task_id, "new_status": "archived"}
+
+
+@app.post("/api/tasks/{task_id}/add-artifact")
+async def api_task_add_artifact(task_id: str, body: dict):
+    """Add an artifact (deliverable) to a task file."""
+    name = body.get("name", "").strip()
+    path = body.get("path", "").strip()
+    artifact_type = body.get("type", "DOC").strip()
+    if not name or not path:
+        return {"success": False, "error": "name and path are required"}, 400
+
+    tasks_dir = os.path.join(_get_cyber_team_dir(), "tasks")
+    if not os.path.exists(tasks_dir):
+        return {"success": False, "error": "Tasks directory not found"}, 404
+
+    target_file = None
+    for filename in os.listdir(tasks_dir):
+        if filename.endswith(".md") and task_id in filename:
+            target_file = os.path.join(tasks_dir, filename)
+            break
+
+    if not target_file:
+        return {"success": False, "error": f"Task {task_id} not found"}, 404
+
+    try:
+        with open(target_file, "r") as f:
+            content = f.read()
+
+        # Check if artifact section exists
+        if "## 产出物" in content:
+            # Append to existing section
+            new_line = f"- **{name}** ({artifact_type}): `{path}`\n"
+            # Insert before the next ## section or at end
+            lines = content.split("\n")
+            insert_idx = len(lines)
+            for i, line in enumerate(lines):
+                if line.startswith("## 产出物"):
+                    # Find next ## section
+                    for j in range(i + 1, len(lines)):
+                        if lines[j].startswith("## ") and j > i:
+                            insert_idx = j
+                            break
+                    break
+            lines.insert(insert_idx, new_line)
+            content = "\n".join(lines)
+        else:
+            # Create artifact section before the last section or at end
+            new_section = f"\n## 产出物\n\n- **{name}** ({artifact_type}): `{path}`\n"
+            content = content.rstrip() + new_section
+
+        with open(target_file, "w") as f:
+            f.write(content)
+
+        await on_data_changed()
+        return {"success": True, "task_id": task_id, "artifact": {"name": name, "path": path, "type": artifact_type}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}, 500
+
+
+# ─── File Content ────────────────────────────────────────────────────────────
+
+@app.get("/api/file-content")
+async def api_file_content(path: str):
+    """Read and return file content for preview."""
+    if not path:
+        return {"error": "path is required"}, 400
+
+    # Security: prevent directory traversal
+    clean_path = os.path.normpath(path).lstrip("/")
+    if ".." in clean_path:
+        return {"error": "Invalid path"}, 400
+
+    # Resolve against cyber-team directory
+    base_dir = _get_cyber_team_dir()
+    full_path = os.path.join(base_dir, clean_path)
+
+    # Also try direct path if cyber-team prefix doesn't resolve
+    if not os.path.exists(full_path):
+        full_path = os.path.join(os.path.dirname(base_dir), clean_path)
+    if not os.path.exists(full_path):
+        full_path = clean_path
+
+    if not os.path.exists(full_path):
+        return {"error": f"File not found: {path}"}, 404
+    if not os.path.isfile(full_path):
+        return {"error": f"Not a file: {path}"}, 400
+
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return {"content": content, "path": path}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
+# ─── Team Status MD ─────────────────────────────────────────────────────────
+
+@app.get("/api/team/status-md")
+async def api_team_status_md():
+    """Return all agent status md contents."""
+    status_dir = os.path.join(_get_cyber_team_dir(), "status")
+    result = {}
+    if not os.path.exists(status_dir):
+        return result
+    for filename in os.listdir(status_dir):
+        if filename.endswith(".md"):
+            agent_id = filename.replace(".md", "")
+            filepath = os.path.join(status_dir, filename)
+            try:
+                with open(filepath, "r") as f:
+                    result[agent_id] = f.read()
+            except Exception:
+                pass
+    return result
+
+
+# ─── Task phase helpers ──────────────────────────────────────────────────────
+
+def _check_transition(task_id: str, target_status: str):
+    """Check if a task can transition to target_status."""
+    current = _get_current_task_status(task_id)
+    if not current:
+        return False, f"Task {task_id} not found or has no status"
+    valid_transitions = {
+        "pending-approval": ["pending", "in-progress", "pending-approval", "assigned"],
+        "pending-acceptance": ["in-progress", "pending-acceptance"],
+        "completed": ["pending-acceptance", "completed"],
+        "rejected": ["pending-approval", "pending", "assigned"],
+        "archived": ["completed", "accepted", "archived"],
+    }
+    allowed = valid_transitions.get(target_status, [])
+    if current not in allowed:
+        return False, f"Cannot transition from '{current}' to '{target_status}'"
+    return True, ""
+
+
+def _update_task_status_in_file(task_id: str, new_status: str):
+    """Update task status in the markdown file. Returns (success, filepath)."""
+    tasks_dir = os.path.join(_get_cyber_team_dir(), "tasks")
+    if not os.path.exists(tasks_dir):
+        return False, ""
+
+    for filename in os.listdir(tasks_dir):
+        if filename.endswith(".md") and task_id in filename:
+            filepath = os.path.join(tasks_dir, filename)
+            try:
+                with open(filepath, "r") as f:
+                    content = f.read()
+
+                # Try updating in 任务执行 section first, then anywhere
+                lines = content.split("\n")
+                updated = False
+
+                # Try 任务执行 section
+                in_exec = False
+                for i, line in enumerate(lines):
+                    if "## 任务执行" in line:
+                        in_exec = True
+                        continue
+                    if in_exec and line.startswith("## "):
+                        break
+                    if in_exec and "**状态**:" in line:
+                        lines[i] = re.sub(r"\*\*状态\*\*:\s*.+", f"**状态**: {new_status}", line)
+                        updated = True
+                        break
+
+                # Fallback: update first **状态** before 任务执行
+                if not updated:
+                    for i, line in enumerate(lines):
+                        if "## 任务执行" in line:
+                            break
+                        if "**状态**:" in line:
+                            lines[i] = re.sub(r"\*\*状态\*\*:\s*.+", f"**状态**: {new_status}", line)
+                            updated = True
+                            break
+
+                if updated:
+                    # Also add/update 完成时间 or 更新时间
+                    with open(filepath, "w") as f:
+                        f.write("\n".join(lines))
+                    return True, filepath
+
+                return False, ""
+            except Exception:
+                return False, ""
+
+    return False, ""
+
+
+def _get_task_title(task_id: str) -> str:
+    """Get task title from tasks data."""
+    data = get_data()
+    for t in data.get("tasks", []):
+        if t.get("id") == task_id:
+            return t.get("title", task_id)
+    return task_id
+
+
+def _get_current_task_status(task_id: str) -> str:
+    """Read the current status from a task file. Checks 任务执行 section first, then pre-exec sections."""
+    tasks_dir = os.path.join(_get_cyber_team_dir(), "tasks")
+    if not os.path.exists(tasks_dir):
+        return ""
+
+    for filename in os.listdir(tasks_dir):
+        if filename.endswith(".md") and task_id in filename:
+            filepath = os.path.join(tasks_dir, filename)
+            try:
+                with open(filepath, "r") as f:
+                    content = f.read()
+
+                lines = content.split("\n")
+                # First: check 任务执行 section
+                in_execution_section = False
+                for line in lines:
+                    if "## 任务执行" in line:
+                        in_execution_section = True
+                        continue
+                    if in_execution_section and line.startswith("## "):
+                        break
+                    if in_execution_section and "**状态**:" in line:
+                        m = re.search(r"\*\*状态\*\*:\s*(.+)", line)
+                        return m.group(1).strip() if m else ""
+
+                # Fallback: check all sections before 任务执行 for **状态**:
+                in_pre_section = True
+                for line in lines:
+                    if "## 任务执行" in line:
+                        break
+                    if "**状态**:" in line:
+                        m = re.search(r"\*\*状态\*\*:\s*(.+)", line)
+                        if m:
+                            return m.group(1).strip()
+
+                return ""
+            except Exception:
+                return ""
+
+    return ""
 
 
 # ─── WebSocket ───────────────────────────────────────────────────────────────
