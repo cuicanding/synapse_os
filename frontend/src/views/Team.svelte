@@ -635,81 +635,43 @@
                 {#if !isUnassigned}
                   {@const activity = getLatestActivity(card)}
                   <div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
-                    <!-- 当前任务 -->
-                    <div>
-                      <p class="text-xs text-txt-secondary font-mono">任务</p>
-                      <p class="text-xs text-txt-primary font-chinese truncate" title={card.currentTask}>
-                        {card.currentTask || "—"}
-                      </p>
-                    </div>
-
                     <!-- 最新动态 -->
                     <div class="bg-white/5 rounded px-2 py-1.5">
-                      <p class="text-xs text-txt-secondary/70 font-mono mb-0.5">最新动态</p>
-                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-3" title={activity}>
+                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2" title={activity}>
                         {activity}
                       </p>
                     </div>
 
-                    <!-- 进展 -->
+                    <!-- 状态 + 时间 -->
                     <div class="flex items-center justify-between">
-                      <span class="text-xs text-txt-secondary font-mono">进展</span>
-                      <span class="text-xs">{progressLabel(card.progress)}</span>
+                      <span class="text-xs text-cyber-cyan">{progressLabel(card.progress)}</span>
+                      <span class="text-xs text-txt-secondary/50 font-mono">📡 {timeAgo(card.lastReportAt)}</span>
                     </div>
 
-                    <!-- 困难 / 待决策 -->
-                    <div class="flex gap-2">
+                    <!-- 困难 / 待决策 小标签 -->
+                    <div class="flex gap-1.5">
                       {#if hasBlocking}
                         <span class="text-xs bg-cyber-red/10 border border-cyber-red/20 text-cyber-red rounded px-1.5 py-0.5">
-                          🚨 {card.difficulty?.slice(0, 20) || '阻塞中'}
+                          🚨 {card.difficulty?.slice(0, 15) || '阻塞'}
                         </span>
                       {/if}
                       {#if hasDecision}
                         <span class="text-xs bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber rounded px-1.5 py-0.5">
-                          🔔 {card.needsDecision?.slice(0, 20) || '待决策'}
+                          🔔 待决策
                         </span>
                       {/if}
                     </div>
-
-                    <!-- 最后报到时间 -->
-                    <p class="text-xs text-txt-secondary/60 font-mono pt-1">
-                      📡 {timeAgo(card.lastReportAt)}
-                    </p>
                   </div>
                 {/if}
 
-                <!-- 阻塞/决策详情 -->
-                {#if hasBlocking && card.difficulty}
-                  <div class="mt-2 p-2 rounded bg-cyber-red/10 border border-cyber-red/20">
-                    <p class="text-xs text-cyber-red/90 font-chinese">{card.difficulty}</p>
-                  </div>
-                {/if}
-                {#if hasDecision && card.needsDecision}
-                  <div class="mt-2 p-2 rounded bg-cyber-amber/10 border border-cyber-amber/20">
-                    <p class="text-xs text-cyber-amber/90 font-chinese">{card.needsDecision}</p>
-                  </div>
-                {/if}
-
-                <!-- 操作按钮 -->
+                <!-- 详情按钮 -->
                 {#if card.agentId}
-                  <div class="mt-3 pt-2 border-t border-white/5 flex gap-2">
-                    <button
-                      onclick={() => openHistory(card.agentId || '')}
-                      class="flex-1 text-xs py-1 rounded bg-white/5 hover:bg-white/10 text-txt-secondary hover:text-txt-primary transition-colors"
-                    >
-                      📋 历史
-                    </button>
+                  <div class="mt-3 pt-2 border-t border-white/5">
                     <button
                       onclick={() => openTodayModal(card)}
-                      class="flex-1 text-xs py-1 rounded bg-white/5 hover:bg-cyber-cyan/10 text-txt-secondary hover:text-cyber-cyan transition-colors"
+                      class="w-full text-xs py-1.5 rounded bg-white/5 hover:bg-cyber-cyan/10 text-txt-secondary hover:text-cyber-cyan transition-colors"
                     >
-                      📝 动态
-                    </button>
-                    <button
-                      onclick={() => openDifficulty(card.agentId || '')}
-                      class="flex-1 text-xs py-1 rounded bg-white/5 hover:bg-cyber-red/10 text-txt-secondary hover:text-cyber-red transition-colors"
-                    >
-                      🚨 困难
+                      📋 今日详情
                     </button>
                   </div>
                 {/if}
