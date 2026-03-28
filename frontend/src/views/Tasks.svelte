@@ -9,8 +9,6 @@
     approveTask,
     rejectTask,
     acceptTask,
-    requestTaskRevision,
-    addArtifact,
     archiveTask,
     completeTask,
     type PhaseInfo,
@@ -86,35 +84,6 @@
     previewArtifact = null;
     previewContent = "";
     previewError = "";
-  }
-
-  // Artifact form
-  let showArtifactForm = false;
-  let artifactName = "";
-  let artifactPath = "";
-  let artifactType = "DS";
-
-  function toggleArtifactForm() {
-    showArtifactForm = !showArtifactForm;
-    if (!showArtifactForm) {
-      artifactName = "";
-      artifactPath = "";
-      artifactType = "DS";
-    }
-  }
-
-  async function submitArtifact(taskId: string) {
-    if (!artifactName.trim() || !artifactPath.trim()) return;
-    try {
-      await addArtifact(taskId, {
-        name: artifactName.trim(),
-        path: artifactPath.trim(),
-        type: artifactType,
-      });
-      toggleArtifactForm();
-    } catch (e) {
-      console.error("Failed to add artifact:", e);
-    }
   }
 
   // Parse artifacts from task content
@@ -211,19 +180,19 @@
     }
   }
 
-  async function handleRevision(taskId: string) {
-    try {
-      await requestTaskRevision(taskId);
-    } catch (e) {
-      console.error("Request revision failed:", e);
-    }
-  }
-
   async function handleComplete(taskId: string) {
     try {
       await completeTask(taskId);
     } catch (e) {
       console.error("Complete failed:", e);
+    }
+  }
+
+  async function handleArchive(taskId: string) {
+    try {
+      await archiveTask(taskId);
+    } catch (e) {
+      console.error("Archive failed:", e);
     }
   }
 
@@ -566,12 +535,6 @@
                     >
                       ✅ 验收通过
                     </button>
-                    <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-amber/15 border border-cyber-amber/30 text-cyber-amber hover:bg-cyber-amber/25 transition-colors"
-                      on:click|stopPropagation={() => handleRevision(task.id)}
-                    >
-                      🔄 退回修改
-                    </button>
                   {:else if task.status === 'in-progress'}
                     <button
                       class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-cyan/15 border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/25 transition-colors"
@@ -581,59 +544,15 @@
                     </button>
                   {/if}
 
-                  <!-- Add Artifact Button -->
-                  <button
-                    class="px-3 py-1.5 rounded text-xs font-mono bg-white/5 border border-white/10 text-txt-secondary hover:bg-white/10 transition-colors"
-                    on:click|stopPropagation={toggleArtifactForm}
-                  >
-                    📎 添加产出物
-                  </button>
+                  {#if task.status === 'completed' || task.status === 'accepted'}
+                    <button
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-white/5 border border-white/10 text-txt-secondary hover:bg-white/10 transition-colors"
+                      on:click|stopPropagation={() => handleArchive(task.id)}
+                    >
+                      🗄️ 归档废弃
+                    </button>
+                  {/if}
                 </div>
-
-                <!-- Artifact Form -->
-                {#if showArtifactForm}
-                  <div class="mt-3 p-3 rounded-lg bg-bg-mid/40 border border-white/10 space-y-2">
-                    <p class="text-xs font-mono text-txt-secondary">添加产出物</p>
-                    <div class="grid grid-cols-3 gap-2">
-                      <input
-                        type="text"
-                        placeholder="名称"
-                        bind:value={artifactName}
-                        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs text-txt-primary placeholder-txt-secondary/40"
-                      />
-                      <input
-                        type="text"
-                        placeholder="路径"
-                        bind:value={artifactPath}
-                        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs text-txt-primary placeholder-txt-secondary/40"
-                      />
-                      <select
-                        bind:value={artifactType}
-                        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs text-txt-primary"
-                      >
-                        <option value="DS">DS - 设计方案</option>
-                        <option value="DOC">DOC - 文档</option>
-                        <option value="DEMO">DEMO - 演示</option>
-                        <option value="OTHER">OTHER - 其他</option>
-                      </select>
-                    </div>
-                    <div class="flex justify-end gap-2">
-                      <button
-                        class="px-2 py-1 rounded text-xs bg-white/5 border border-white/10 text-txt-secondary hover:bg-white/10"
-                        on:click={toggleArtifactForm}
-                      >
-                        取消
-                      </button>
-                      <button
-                        class="px-2 py-1 rounded text-xs bg-cyber-cyan/15 border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/25"
-                        on:click|stopPropagation={() => submitArtifact(task.id)}
-                        disabled={!artifactName.trim() || !artifactPath.trim()}
-                      >
-                        提交
-                      </button>
-                    </div>
-                  </div>
-                {/if}
               </div>
 
               <div class="flex items-center gap-4 text-xs font-mono text-txt-secondary">

@@ -522,6 +522,8 @@ VALID_TRANSITIONS = {
     "pending-approval": {"in-progress", "rejected", "discussing"},
     "in-progress": {"pending-acceptance"},
     "pending-acceptance": {"completed", "in-progress"},
+    "completed": {"archived"},
+    "accepted": {"archived"},
 }
 
 
