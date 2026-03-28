@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-28T15:27:51.438686+08:00",
+  "updated_at": "2026-03-28T15:31:02.069751+08:00",
   "agents": {
     "reed": {
       "agent_id": "reed",
@@ -14,8 +14,8 @@
       "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
       "needs_help": null,
       "task_id": "task-infra-021",
-      "last_report_at": "2026-03-28T15:27:51.435753+08:00",
-      "next_report_at": "2026-03-28T15:42:51.435767+08:00",
+      "last_report_at": "2026-03-28T15:31:02.067272+08:00",
+      "next_report_at": "2026-03-28T15:46:02.067285+08:00",
       "online_status": "online",
       "is_stale": false,
       "_task_status": "pending-acceptance"
@@ -33,8 +33,8 @@
       "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
       "needs_help": null,
       "task_id": "task-infra-006",
-      "last_report_at": "2026-03-28T15:27:51.436021+08:00",
-      "next_report_at": "2026-03-28T15:42:51.436027+08:00",
+      "last_report_at": "2026-03-28T15:31:02.067499+08:00",
+      "next_report_at": "2026-03-28T15:46:02.067504+08:00",
       "online_status": "online",
       "is_stale": false,
       "_task_status": "已驳回"
@@ -52,8 +52,8 @@
       "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
       "needs_help": null,
       "task_id": "task-infra-019",
-      "last_report_at": "2026-03-28T15:27:51.437152+08:00",
-      "next_report_at": "2026-03-28T15:42:51.437156+08:00",
+      "last_report_at": "2026-03-28T15:31:02.068457+08:00",
+      "next_report_at": "2026-03-28T15:46:02.068460+08:00",
       "online_status": "online",
       "is_stale": false,
       "_task_status": "`assigned`"

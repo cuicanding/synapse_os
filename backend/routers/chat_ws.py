@@ -260,29 +260,21 @@ async def ensure_session(gw_ws, msg_queue, agent_id):
     return key
 
 
-@router.post("/api/chat/sync-session")
-async def sync_from_session(body: dict):
-    """从 OpenClaw agent session 文件读取消息，去重后追加到频道 JSONL。"""
-    agent_id = body.get("agent_id", "")
-    if not agent_id or agent_id not in AGENT_SESSION_KEYS:
-        return {"error": f"Unknown agent: {agent_id}"}, 400
-
+async def _sync_session_to_jsonl(agent_id: str) -> int:
+    """从 agent session 文件读取消息，去重后追加到频道 JSONL。返回同步数量。"""
     channel_id = f"dm-{agent_id}"
-
     session_dir = os.path.expanduser(f"~/.openclaw-can/agents/{agent_id}/sessions")
     if not os.path.isdir(session_dir):
-        return {"synced": 0, "channel_id": channel_id}
+        return 0
 
-    # 找最新的 session 文件
     session_files = sorted(
         [f for f in os.listdir(session_dir) if f.endswith(".jsonl")],
         key=lambda f: os.path.getmtime(os.path.join(session_dir, f)),
         reverse=True,
     )
     if not session_files:
-        return {"synced": 0, "channel_id": channel_id}
+        return 0
 
-    # 读取 session 文件中的消息
     session_messages = []
     latest_path = os.path.join(session_dir, session_files[0])
     with open(latest_path, "r", encoding="utf-8") as f:
@@ -317,9 +309,8 @@ async def sync_from_session(body: dict):
         if len(session_messages) >= 100:
             break
 
-    session_messages.reverse()  # 恢复时间顺序
+    session_messages.reverse()
 
-    # 去重：读取现有 JSONL 中已有的 id
     safe_id = channel_id.replace("/", "_").replace("\\", "_")
     jsonl_path = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.jsonl")
     existing_ids = set()
@@ -333,7 +324,6 @@ async def sync_from_session(body: dict):
                     except json.JSONDecodeError:
                         continue
 
-    # 追加新消息到 JSONL
     synced = 0
     with _history_lock:
         with open(jsonl_path, "a", encoding="utf-8") as f:
@@ -343,7 +333,21 @@ async def sync_from_session(body: dict):
                     existing_ids.add(m["id"])
                     synced += 1
 
-    return {"synced": synced, "channel_id": channel_id}
+    if synced > 0:
+        print(f"[ws:chat] Synced {synced} messages from session to {channel_id} JSONL")
+        sys.stdout.flush()
+    return synced
+
+
+@router.post("/api/chat/sync-session")
+async def sync_from_session(body: dict):
+    """从 OpenClaw agent session 文件读取消息，去重后追加到频道 JSONL。"""
+    agent_id = body.get("agent_id", "")
+    if not agent_id or agent_id not in AGENT_SESSION_KEYS:
+        return {"error": f"Unknown agent: {agent_id}"}, 400
+
+    synced = await _sync_session_to_jsonl(agent_id)
+    return {"synced": synced, "channel_id": f"dm-{agent_id}"}
 
 
 def _extract_session_text(content) -> str:
@@ -359,13 +363,12 @@ def _extract_session_text(content) -> str:
                 ptype = part.get("type", "")
                 if ptype == "text":
                     t = part.get("text", "").strip()
-                    if t and t != "NO_REPLY":
+                    if t and t != "NO_REPLY" and not t.startswith("OpenClaw runtime context"):
                         texts.append(t)
                 elif ptype == "toolCall":
                     name = part.get("name", part.get("toolName", ""))
                     texts.append(f"🔧 {name}")
                 elif ptype == "toolResult":
-                    # skip tool results in history view
                     continue
         return "\n".join(texts).strip()
     return ""
@@ -578,6 +581,11 @@ async def websocket_chat(ws: WebSocket):
                 new_channel = msg.get("channelId", "")
                 if new_channel:
                     current_channel = new_channel
+                    # 自动同步：DM 频道从 session 文件补写缺失消息到 JSONL
+                    if is_dm_channel(new_channel):
+                        agent_id = new_channel[3:]
+                        if agent_id in AGENT_SESSION_KEYS:
+                            await _sync_session_to_jsonl(agent_id)
                     history = get_channel_history(new_channel, limit=50)
                     members = get_channel_members(new_channel)
                     await ws.send_json({
