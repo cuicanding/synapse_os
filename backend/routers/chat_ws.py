@@ -260,6 +260,89 @@ async def ensure_session(gw_ws, msg_queue, agent_id):
     return key
 
 
+@router.get("/api/chat/sync-session")
+async def sync_from_session(agent_id: str, limit: int = 50):
+    """从 OpenClaw agent session 文件读取最新消息，返回标准化历史。"""
+    if not agent_id or agent_id not in AGENT_SESSION_KEYS:
+        return {"error": f"Unknown agent: {agent_id}"}, 400
+
+    session_dir = os.path.expanduser(f"~/.openclaw-can/agents/{agent_id}/sessions")
+    if not os.path.isdir(session_dir):
+        return {"messages": []}
+
+    # 找最新的 session 文件
+    session_files = sorted(
+        [f for f in os.listdir(session_dir) if f.endswith(".jsonl")],
+        key=lambda f: os.path.getmtime(os.path.join(session_dir, f)),
+        reverse=True,
+    )
+    if not session_files:
+        return {"messages": []}
+
+    # 读取最新 session 文件，从后往前取 limit 条用户/助手消息
+    messages = []
+    latest_path = os.path.join(session_dir, session_files[0])
+    with open(latest_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("type") != "message":
+            continue
+        msg = entry.get("message", {})
+        role = msg.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+        content = msg.get("content", "")
+        text = _extract_session_text(content)
+        if not text or text == "NO_REPLY":
+            continue
+        messages.append({
+            "id": entry.get("id", ""),
+            "senderId": agent_id if role == "assistant" else "user",
+            "senderName": AGENT_DISPLAY_NAMES.get(agent_id, {}).get("name", agent_id) if role == "assistant" else "果爸",
+            "content": text,
+            "timestamp": entry.get("timestamp", ""),
+            "role": role,
+        })
+        if len(messages) >= limit:
+            break
+
+    messages.reverse()  # 恢复时间顺序
+    return {"messages": messages, "session_file": session_files[0]}
+
+
+def _extract_session_text(content) -> str:
+    """Extract displayable text from session message content."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part.strip())
+            elif isinstance(part, dict):
+                ptype = part.get("type", "")
+                if ptype == "text":
+                    t = part.get("text", "").strip()
+                    if t and t != "NO_REPLY":
+                        texts.append(t)
+                elif ptype == "toolCall":
+                    name = part.get("name", part.get("toolName", ""))
+                    texts.append(f"🔧 {name}")
+                elif ptype == "toolResult":
+                    # skip tool results in history view
+                    continue
+        return "\n".join(texts).strip()
+    return ""
+
+
 @router.websocket("/ws/chat")
 async def websocket_chat(ws: WebSocket):
     await ws.accept()

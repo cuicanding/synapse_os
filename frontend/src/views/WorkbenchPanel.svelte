@@ -107,6 +107,9 @@
     return channels.find(c => c.id === currentChannelId);
   }
 
+  // Reactive current channel info (for title bar)
+  $: currentChannelObj = getCurrentChannel();
+
   function getCurrentChannelState(): ChannelState {
     return getChannelState(currentChannelId);
   }
@@ -433,6 +436,53 @@
     }
   }
 
+  async function syncFromSession() {
+    if (!currentChannelId || !currentChannelId.startsWith("dm-")) {
+      // domain 频道暂不支持 session 同步
+      return;
+    }
+    var agentId = currentChannelId.replace("dm-", "");
+    try {
+      var resp = await fetch("/api/chat/sync-session?agent_id=" + encodeURIComponent(agentId) + "&limit=50");
+      if (!resp.ok) return;
+      var data = await resp.json();
+      var sessionMsgs = data.messages || [];
+      if (sessionMsgs.length === 0) return;
+
+      // 转换为前端消息格式，去重（按 id）
+      var existingIds = new Set((channelStates[currentChannelId]?.messages || []).map(function(m: any) { return m.id; }));
+      var newMsgs = sessionMsgs.filter(function(m: any) { return m.id && !existingIds.has(m.id); }).map(function(m: any) {
+        return {
+          role: m.role === "user" ? "user" : "turn",
+          type: m.role === "user" ? "user" : "turn",
+          content: m.content || "",
+          response: m.role === "assistant" ? m.content : "",
+          senderId: m.senderId,
+          senderName: m.senderName,
+          timestamp: m.timestamp
+        };
+      });
+
+      if (newMsgs.length === 0) return;
+
+      var existingState = channelStates[currentChannelId] || DEFAULT_CHANNEL_STATE;
+      // 合并后按 timestamp 排序
+      var allMsgs = [...existingState.messages, ...newMsgs].sort(function(a: any, b: any) {
+        return (a.timestamp || "").localeCompare(b.timestamp || "");
+      });
+      channelStates = {
+        ...channelStates,
+        [currentChannelId]: {
+          ...existingState,
+          messages: allMsgs
+        }
+      };
+      setTimeout(scrollToBottom, 100);
+    } catch (e) {
+      console.error("[chat] syncFromSession failed:", e);
+    }
+  }
+
 
   // ==================== Lifecycle ====================
   onMount(function() {
@@ -593,28 +643,23 @@
   <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
     <!-- 聊天顶栏 -->
     {#if currentChannelId}
-      {@const currentChannel = getCurrentChannel()}
       <div style="padding:12px 20px;border-bottom:1px solid rgba(0,229,255,0.1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:8px;">
-          {#if currentChannel}
-            <span style="font-size:18px;">{currentChannel.icon}</span>
-            <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannel.name}</span>
+          {#if currentChannelObj}
+            <span style="font-size:18px;">{currentChannelObj.icon}</span>
+            <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannelObj.name}</span>
           {:else}
             <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannelId}</span>
           {/if}
-          <span style="font-size:11px;color:#64748b;">({(currentChannel?.members || currentChannelState.members || []).length} 人)</span>
+          <span style="font-size:11px;color:#64748b;">({(currentChannelObj?.members || currentChannelState.members || []).length} 人)</span>
         </div>
         <button
           type="button"
-          on:click={() => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'join_channel', channelId: currentChannelId }));
-            }
-          }}
-          style="padding:4px 12px;font-size:12px;color:#64748b;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:4px;"
-          title="同步当前频道历史消息"
+          on:click={syncFromSession}
+          style="padding:4px 12px;font-size:12px;color:#00e5ff;background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:4px;"
+          title="从 Agent Session 文件同步最新消息"
         >
-          ⟳ 同步历史
+          ⟳ 同步
         </button>
       </div>
     {/if}

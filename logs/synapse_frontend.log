@@ -36,3 +36,13 @@
 15:18:37 [vite] ws proxy socket error:
 Error: read ECONNRESET
     at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+15:24:55 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
+15:24:55 [vite-plugin-svelte] /home/cunxiao/synapse_os/frontend/src/views/WorkbenchPanel.svelte:549:20 'syncFromSession' is not defined
+15:24:57 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
+15:24:57 [vite-plugin-svelte] /home/cunxiao/synapse_os/frontend/src/views/WorkbenchPanel.svelte:535:19 'getCurrentChannel' is not defined
+15:24:57 [vite-plugin-svelte] /home/cunxiao/synapse_os/frontend/src/views/WorkbenchPanel.svelte:548:20 'syncFromSession' is not defined
+15:24:59 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
+15:24:59 [vite-plugin-svelte] /home/cunxiao/synapse_os/frontend/src/views/WorkbenchPanel.svelte:551:20 'syncFromSession' is not defined
+15:25:05 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
+15:25:05 [vite-plugin-svelte] /home/cunxiao/synapse_os/frontend/src/views/WorkbenchPanel.svelte:550:20 'syncFromSession' is not defined
+15:25:26 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
