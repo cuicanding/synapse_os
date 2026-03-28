@@ -10,6 +10,7 @@
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let registry: Record<string, any> = {};
   let collapsed: Record<string, boolean> = {};
+  let agentStatusMd: Record<string, { work_status: string; current_task: string; last_update: string; raw: string }> = {};
 
   // Today modal state
   let showTodayModal = false;
@@ -115,6 +116,18 @@
     }
   }
 
+  // ─── 从 STATUS.md 读取员工真实状态 ─────────────────────────────────────
+  async function loadAgentStatus() {
+    try {
+      const r = await fetch("/api/agent-status");
+      if (r.ok) {
+        agentStatusMd = await r.json();
+      }
+    } catch (e) {
+      console.warn("[team] agent-status load failed:", e);
+    }
+  }
+
   // ─── 从 status panel 拿实时状态 ────────────────────────────────────────
   async function refresh() {
     try {
@@ -164,6 +177,7 @@
     needsDecision: string | null;
     currentTask: string;
     lastReportAt: string | null;
+    statusMd: { work_status: string; current_task: string; last_update: string; raw: string } | null;
   }
 
   // 名字匹配：assigned_to 可能是 "Reed（里德）" 或 "苏珊"，
@@ -252,6 +266,7 @@
           needsDecision: reported?.needs_decision || null,
           currentTask: reported?.current_task || "",
           lastReportAt: reported?.last_report_at || null,
+          statusMd: agentId ? (agentStatusMd[agentId] || null) : null,
         });
       }
     }
@@ -386,9 +401,10 @@
   onMount(() => {
     startStatusWs();
     loadRegistry();
+    loadAgentStatus();
     refresh();
     fetchCollaborations();
-    refreshTimer = setInterval(() => { refresh(); loadRegistry(); fetchCollaborations(); }, 30000);
+    refreshTimer = setInterval(() => { refresh(); loadRegistry(); loadAgentStatus(); fetchCollaborations(); }, 30000);
   });
 
   onDestroy(() => {
@@ -633,33 +649,26 @@
 
                 <!-- 任务信息（仅已分配人员显示）-->
                 {#if !isUnassigned}
-                  {@const activity = getLatestActivity(card)}
+                  {@const smd = card.statusMd}
+                  {@const isBusy = smd ? smd.work_status.includes("忙碌") : isStale}
+                  {@const isIdle = smd ? smd.work_status.includes("空闲") : false}
                   <div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
-                    <!-- 最新动态 -->
-                    <div class="bg-white/5 rounded px-2 py-1.5">
-                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2" title={activity}>
-                        {activity}
+                    <!-- 红绿灯 + 动态 -->
+                    <div class="flex items-start gap-2">
+                      <span class="text-sm mt-0.5 flex-shrink-0">{smd ? (isBusy ? '🔴' : '🟢') : '⚪'}</span>
+                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2 flex-1" title={smd?.current_task || card.currentTask || '暂无'}>
+                        {smd?.current_task || card.currentTask || '暂无动态'}
                       </p>
                     </div>
 
                     <!-- 状态 + 时间 -->
                     <div class="flex items-center justify-between">
-                      <span class="text-xs text-cyber-cyan">{progressLabel(card.progress)}</span>
-                      <span class="text-xs text-txt-secondary/50 font-mono">📡 {timeAgo(card.lastReportAt)}</span>
-                    </div>
-
-                    <!-- 困难 / 待决策 小标签 -->
-                    <div class="flex gap-1.5">
-                      {#if hasBlocking}
-                        <span class="text-xs bg-cyber-red/10 border border-cyber-red/20 text-cyber-red rounded px-1.5 py-0.5">
-                          🚨 {card.difficulty?.slice(0, 15) || '阻塞'}
-                        </span>
-                      {/if}
-                      {#if hasDecision}
-                        <span class="text-xs bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber rounded px-1.5 py-0.5">
-                          🔔 待决策
-                        </span>
-                      {/if}
+                      <span class="text-xs {isBusy ? 'text-cyber-amber' : isIdle ? 'text-cyber-green' : 'text-txt-secondary'}">
+                        {smd ? smd.work_status : (card.isStale ? '⚪ 未报到' : '⚪ 未知')}
+                      </span>
+                      <span class="text-xs text-txt-secondary/50 font-mono">
+                        {smd?.last_update || timeAgo(card.lastReportAt)}
+                      </span>
                     </div>
                   </div>
                 {/if}

@@ -1013,6 +1013,45 @@ async def api_team_status_md():
     return result
 
 
+@app.get("/api/agent-status")
+async def api_agent_status():
+    """Read each agent's STATUS.md from OpenClaw agents directory.
+    Returns {agent_id: {work_status, current_task, last_update, raw}}."""
+    agents_dir = os.path.expanduser("~/.openclaw-can/agents")
+    result = {}
+    if not os.path.isdir(agents_dir):
+        return result
+    for dirname in os.listdir(agents_dir):
+        status_path = os.path.join(agents_dir, dirname, "STATUS.md")
+        if not os.path.isfile(status_path):
+            continue
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # Parse key fields
+            work_status = "🟢 空闲"
+            current_task = ""
+            last_update = ""
+            for line in content.split("\n"):
+                line = line.strip()
+                if line.startswith("- **工作状态**:"):
+                    work_status = line.split(":", 1)[1].strip()
+                elif line.startswith("- **当前任务**:"):
+                    current_task = line.split(":", 1)[1].strip()
+                elif line.startswith("- **最后更新**:"):
+                    last_update = line.split(":", 1)[1].strip()
+            result[dirname] = {
+                "agent_id": dirname,
+                "work_status": work_status,
+                "current_task": current_task,
+                "last_update": last_update,
+                "raw": content,
+            }
+        except Exception:
+            pass
+    return result
+
+
 # ─── Task phase helpers ──────────────────────────────────────────────────────
 
 def _check_transition(task_id: str, target_status: str):

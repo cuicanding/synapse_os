@@ -48,3 +48,8 @@ Error: read ECONNRESET
 15:25:26 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
 15:25:58 [vite] hmr update /src/views/Team.svelte, /src/app.css
 15:26:30 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css
+15:28:04 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:28:07 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:28:15 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:28:19 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:28:27 [vite] hmr update /src/views/Team.svelte, /src/app.css
