@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { communicateRequest, showWorkbench } from "../lib/stores";
 
   // ========== 类型定义 ==========
   interface Turn {
@@ -116,11 +117,22 @@
 
   function parseMarkdown(text: string): string {
     if (!text) return "";
+    // Process tables first (before \n → <br/>)
+    text = text.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm, function(match, header, sep, body) {
+      var headers = header.split('|').filter(c => c.trim()).map(c => '<th style="padding:6px 10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);font-weight:600;text-align:left;font-size:12px;white-space:nowrap;">' + c.trim() + '</th>').join('');
+      var rows = body.trim().split('\n').map(function(row) {
+        var cells = row.split('|').filter(c => c.trim()).map(c => '<td style="padding:5px 10px;border:1px solid rgba(255,255,255,0.08);font-size:12px;">' + c.trim() + '</td>').join('');
+        return '<tr>' + cells + '</tr>';
+      }).join('');
+      return '<table style="border-collapse:collapse;margin:8px 0;width:100%;max-width:100%;overflow-x:auto;display:block;">' +
+        '<thead>' + headers + '</thead><tbody>' + rows + '</tbody></table>';
+    });
     return text
       .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.4);padding:10px;border-radius:6px;overflow-x:auto;margin:8px 0;font-size:12px;"><code>$2</code></pre>')
       .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff;">$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       .replace(/`(.+?)`/g, '<code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:12px;">$1</code>')
+      .replace(/^#### (.+)$/gm, '<div style="font-size:14px;font-weight:700;color:#ccc;margin:10px 0 4px;">$1</div>')
       .replace(/^### (.+)$/gm, '<div style="font-size:15px;font-weight:700;color:#fff;margin:12px 0 6px;">$1</div>')
       .replace(/^## (.+)$/gm, '<div style="font-size:16px;font-weight:700;color:#fff;margin:14px 0 8px;">$1</div>')
       .replace(/^# (.+)$/gm, '<div style="font-size:17px;font-weight:700;color:#fff;margin:16px 0 8px;">$1</div>')
@@ -177,24 +189,46 @@
         console.log('[chat] channel_joined:', msg.channelId, 'members:', (msg.members || []).length);
         currentChannelId = msg.channelId;
         joinedChannels.add(msg.channelId);
-        
+
+        // 从 history 构建消息列表，但避免与已有 streaming 消息重复
+        var historyMsgs = (msg.history || []).map(function(m) {
+          return {
+            role: m.role,
+            type: m.role === "user" ? "user" : "turn",
+            content: m.content || "",
+            response: m.role === "assistant" ? m.content : "",
+            senderId: m.senderId,
+            senderName: m.senderName,
+            timestamp: m.timestamp
+          };
+        });
+
+        // 如果已有消息，用 history 替换（history 是权威源），但要保留正在 streaming 的最后一条
+        var existingMsgs = channelStates[msg.channelId]?.messages || [];
+        var lastStreaming = existingMsgs.length > 0 && existingMsgs[existingMsgs.length - 1].streaming
+          ? existingMsgs[existingMsgs.length - 1]
+          : null;
+
+        var finalMsgs = historyMsgs;
+        if (lastStreaming) {
+          // 检查 history 最后一条是否和 streaming 消息内容相同（说明已持久化完成）
+          var lastHistory = historyMsgs[historyMsgs.length - 1];
+          if (lastHistory && lastHistory.senderId === lastStreaming.senderId && lastHistory.response === lastStreaming.response) {
+            // history 已包含完整内容，用 history 的非 streaming 版本
+            finalMsgs = historyMsgs;
+          } else {
+            // 保留 streaming 消息
+            finalMsgs = [...historyMsgs, lastStreaming];
+          }
+        }
+
         // 使用深拷贝创建新对象，确保 Svelte 能检测到变更
         channelStates = {
           ...channelStates,
           [msg.channelId]: {
             ...(channelStates[msg.channelId] || DEFAULT_CHANNEL_STATE),
             members: msg.members || [],
-            messages: (msg.history || []).map(function(m) {
-              return {
-                role: m.role,
-                type: m.role === "user" ? "user" : "turn",
-                content: m.content || "",
-                response: m.role === "assistant" ? m.content : "",
-                senderId: m.senderId,
-                senderName: m.senderName,
-                timestamp: m.timestamp
-              };
-            })
+            messages: finalMsgs
           }
         };
         setTimeout(function() { scrollToBottom(); }, 100);
@@ -465,9 +499,23 @@
   onMount(function() {
     connectChatWs();
     if (chatScrollEl) { chatScrollEl.addEventListener('scroll', handleScroll); }
+
+    // 监听沟通改进请求
+    const unsub = communicateRequest.subscribe(async (req) => {
+      if (!req) return;
+      const dmChannelId = `dm-${req.agentId}`;
+      // 打开工作台并切换到对应频道
+      showWorkbench.set(true);
+      joinChannel(dmChannelId);
+      // 预填输入框，不自动发送
+      chatMessage = req.message;
+      communicateRequest.set(null);
+    });
+
     return () => {
       if (ws) { ws.close(); ws = null; }
       if (chatScrollEl) { chatScrollEl.removeEventListener('scroll', handleScroll); }
+      unsub();
     };
   });
 

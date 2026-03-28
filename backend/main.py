@@ -487,7 +487,12 @@ def _update_decision_field(task_id: str, field: str, value: str):
 
 
 def _get_current_task_status(task_id: str) -> str:
-    """Read the current status from the 任务执行 section of a task file."""
+    """Read the current status from a task file.
+    
+    Priority:
+    1. ## 任务执行 section内的 **状态**: or - **状态**:
+    2. 全文件任意位置的 - **状态**: or **状态**: (fallback)
+    """
     tasks_dir = os.path.join(_get_cyber_team_dir(), "tasks")
     if not os.path.exists(tasks_dir):
         return ""
@@ -500,6 +505,9 @@ def _get_current_task_status(task_id: str) -> str:
                     content = f.read()
 
                 lines = content.split("\n")
+                result = ""
+
+                # 1. Check ## 任务执行 section
                 in_execution_section = False
                 for line in lines:
                     if "## 任务执行" in line:
@@ -508,9 +516,22 @@ def _get_current_task_status(task_id: str) -> str:
                     if in_execution_section and line.startswith("## "):
                         break
                     if in_execution_section and "**状态**:" in line:
-                        m = re.match(r"\*\*状态\*\*:\s*(.+)", line)
-                        return m.group(1).strip() if m else ""
-                return ""
+                        m = re.search(r"\*\*状态\*\*:\s*(.+)", line)
+                        if m:
+                            return m.group(1).strip()
+
+                # 2. Fallback: search entire file for status field
+                for line in lines:
+                    m = re.search(r"[-*]\s*\*\*状态\*\*:\s*(.+)", line)
+                    if m:
+                        return m.group(1).strip()
+                    # Also match bare **状态**: without list prefix
+                    if not result:
+                        m2 = re.match(r"\*\*状态\*\*:\s*(.+)", line)
+                        if m2:
+                            result = m2.group(1).strip()
+
+                return result
             except Exception:
                 return ""
 
@@ -595,7 +616,11 @@ def _update_task_status_in_file(task_id: str, new_status: str, extra_content: st
                         # Process lines within this section until next ## heading
                         while i < len(lines) and not lines[i].startswith("## "):
                             if "**状态**:" in lines[i]:
-                                new_lines.append(f"**状态**: {new_status}")
+                                # Preserve the line prefix (e.g., "- " or "- **状态**:")
+                                line = lines[i]
+                                m = re.match(r"^(\s*[-*]\s*)", line)
+                                prefix = m.group(1) if m else ""
+                                new_lines.append(f"{prefix}**状态**: {new_status}")
                                 any_updated = True
                             else:
                                 new_lines.append(lines[i])
@@ -604,6 +629,21 @@ def _update_task_status_in_file(task_id: str, new_status: str, extra_content: st
                     else:
                         new_lines.append(line)
                         i += 1
+
+                # Fallback: if no target sections found, search entire file
+                if not any_updated:
+                    has_target_section = any(f"## {sec}" in content for sec in target_sections)
+                    if not has_target_section:
+                        updated_lines = []
+                        for line in lines:
+                            if "**状态**:" in line:
+                                m = re.match(r"^(\s*[-*]\s*)", line)
+                                prefix = m.group(1) if m else ""
+                                updated_lines.append(f"{prefix}**状态**: {new_status}")
+                                any_updated = True
+                            else:
+                                updated_lines.append(line)
+                        new_lines = updated_lines
 
                 if not any_updated:
                     # Fallback: append status at end
@@ -713,14 +753,15 @@ async def api_task_discuss(task_id: str, body: dict = None):
 
 @app.patch("/api/tasks/{task_id}/accept")
 async def api_task_accept(task_id: str, body: dict = None):
-    """Accept a pending-acceptance task -> completed."""
-    valid, err = _check_transition(task_id, "completed")
-    if not valid:
-        return {"success": False, "error": err}, 400
+    """Accept/complete a task -> completed. Allowed from any non-archived, non-completed status."""
+    current = _get_current_task_status(task_id)
+    if not current:
+        return {"success": False, "error": f"Task {task_id} not found or has no status"}, 404
+    if current in ("archived", "completed", "accepted"):
+        return {"success": False, "error": f"Task already {current}"}, 400
 
-    # Update both 任务执行 and 验收结果 sections
-    success, filepath = _update_task_status_in_file(
-        task_id, "completed", target_sections=["任务执行", "验收结果"])
+    # Update status
+    success, filepath = _update_task_status_in_file(task_id, "completed")
 
     if not success:
         return {"success": False, "error": f"Task {task_id} not found"}
@@ -890,7 +931,7 @@ async def api_task_complete(task_id: str, body: dict = None):
 
 @app.patch("/api/tasks/{task_id}/archive")
 async def api_task_archive(task_id: str, body: dict = None):
-    """Archive a completed/accepted task."""
+    """Archive a completed/accepted task (successful completion)."""
     valid, err = _check_transition(task_id, "archived")
     if not valid:
         return {"success": False, "error": err}, 400
@@ -899,6 +940,21 @@ async def api_task_archive(task_id: str, body: dict = None):
         return {"success": False, "error": f"Task {task_id} not found"}
     await on_data_changed()
     return {"success": True, "task_id": task_id, "new_status": "archived"}
+
+
+@app.patch("/api/tasks/{task_id}/abandon")
+async def api_task_abandon(task_id: str, body: dict = None):
+    """Abandon a failed task -> archived. Allowed from any non-archived status."""
+    current = _get_current_task_status(task_id)
+    if not current:
+        return {"success": False, "error": f"Task {task_id} not found or has no status"}, 404
+    if current in ("archived",):
+        return {"success": False, "error": "Task already archived"}, 400
+    success, filepath = _update_task_status_in_file(task_id, "archived")
+    if not success:
+        return {"success": False, "error": f"Task {task_id} not found"}
+    await on_data_changed()
+    return {"success": True, "task_id": task_id, "new_status": "archived", "action": "abandoned"}
 
 
 @app.post("/api/tasks/{task_id}/add-artifact")
@@ -998,7 +1054,7 @@ async def api_file_content(path: str):
 
 @app.get("/api/team/status-md")
 async def api_team_status_md():
-    """Return all agent status md contents."""
+    """Return all agent status md contents from cyber-team/status/."""
     status_dir = os.path.join(_get_cyber_team_dir(), "status")
     result = {}
     if not os.path.exists(status_dir):
@@ -1015,35 +1071,52 @@ async def api_team_status_md():
     return result
 
 
+@app.get("/api/agents")
+async def api_agents():
+    """Return team.json as the single source of truth for agent registry."""
+    team_path = os.path.join(_get_cyber_team_dir(), "team.json")
+    if os.path.exists(team_path):
+        with open(team_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    return {"agents": []}
+
+
 @app.get("/api/agent-status")
 async def api_agent_status():
-    """Read each agent's STATUS.md from OpenClaw agents directory.
+    """Read each agent's status from cyber-team/status/{agentId}.md (single source of truth).
     Returns {agent_id: {work_status, current_task, last_update, raw}}."""
-    agents_dir = os.path.expanduser("~/.openclaw-can/agents")
     result = {}
-    if not os.path.isdir(agents_dir):
+    status_dir = os.path.join(_get_cyber_team_dir(), "status")
+    if not os.path.isdir(status_dir):
         return result
-    for dirname in os.listdir(agents_dir):
-        status_path = os.path.join(agents_dir, dirname, "STATUS.md")
-        if not os.path.isfile(status_path):
+    for filename in os.listdir(status_dir):
+        if not filename.endswith(".md") or filename == "README.md":
             continue
+        agent_id = filename.replace(".md", "")
+        filepath = os.path.join(status_dir, filename)
         try:
-            with open(status_path, "r", encoding="utf-8") as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
-            # Parse key fields
-            work_status = "🟢 空闲"
-            current_task = ""
             last_update = ""
+            work_status = "⚪ 未知"
+            current_task = ""
             for line in content.split("\n"):
-                line = line.strip()
-                if line.startswith("- **工作状态**:"):
-                    work_status = line.split(":", 1)[1].strip()
-                elif line.startswith("- **当前任务**:"):
-                    current_task = line.split(":", 1)[1].strip()
-                elif line.startswith("- **最后更新**:"):
-                    last_update = line.split(":", 1)[1].strip()
-            result[dirname] = {
-                "agent_id": dirname,
+                line_s = line.strip()
+                if line_s.startswith("更新时间:"):
+                    last_update = line_s.split(":", 1)[1].strip()
+                elif line_s.startswith("- **") and ("任务" in line_s or "方案" in line_s):
+                    current_task = line_s.lstrip("- ").strip()
+                    # Remove leading "- " and strip markdown bold
+                    current_task = current_task.replace("**", "")
+            if "空闲" in content:
+                work_status = "🟢 空闲"
+            elif "忙碌" in content or "进行中" in content:
+                work_status = "🔴 忙碌"
+            elif "完成" in content and "空闲" not in content:
+                work_status = "🟢 空闲"
+            result[agent_id] = {
+                "agent_id": agent_id,
                 "work_status": work_status,
                 "current_task": current_task,
                 "last_update": last_update,
@@ -1053,80 +1126,6 @@ async def api_agent_status():
             pass
     return result
 
-
-# ─── Task phase helpers ──────────────────────────────────────────────────────
-
-def _check_transition(task_id: str, target_status: str):
-    """Check if a task can transition to target_status."""
-    current = _get_current_task_status(task_id)
-    if not current:
-        return False, f"Task {task_id} not found or has no status"
-    valid_transitions = {
-        "pending-approval": ["pending", "in-progress", "pending-approval", "assigned"],
-        "pending-acceptance": ["in-progress", "pending-acceptance"],
-        "completed": ["pending-acceptance", "completed"],
-        "rejected": ["pending-approval", "pending", "assigned"],
-        "archived": ["completed", "accepted", "archived"],
-    }
-    allowed = valid_transitions.get(target_status, [])
-    if current not in allowed:
-        return False, f"Cannot transition from '{current}' to '{target_status}'"
-    return True, ""
-
-
-def _update_task_status_in_file(task_id: str, new_status: str):
-    """Update task status in the markdown file. Returns (success, filepath)."""
-    tasks_dir = os.path.join(_get_cyber_team_dir(), "tasks")
-    if not os.path.exists(tasks_dir):
-        return False, ""
-
-    for filename in os.listdir(tasks_dir):
-        if filename.endswith(".md") and task_id in filename:
-            filepath = os.path.join(tasks_dir, filename)
-            try:
-                with open(filepath, "r") as f:
-                    content = f.read()
-
-                # Try updating in 任务执行 section first, then anywhere
-                lines = content.split("\n")
-                updated = False
-
-                # Try 任务执行 section
-                in_exec = False
-                for i, line in enumerate(lines):
-                    if "## 任务执行" in line:
-                        in_exec = True
-                        continue
-                    if in_exec and line.startswith("## "):
-                        break
-                    if in_exec and "**状态**:" in line:
-                        lines[i] = re.sub(r"\*\*状态\*\*:\s*.+", f"**状态**: {new_status}", line)
-                        updated = True
-                        break
-
-                # Fallback: update first **状态** before 任务执行
-                if not updated:
-                    for i, line in enumerate(lines):
-                        if "## 任务执行" in line:
-                            break
-                        if "**状态**:" in line:
-                            lines[i] = re.sub(r"\*\*状态\*\*:\s*.+", f"**状态**: {new_status}", line)
-                            updated = True
-                            break
-
-                if updated:
-                    # Also add/update 完成时间 or 更新时间
-                    with open(filepath, "w") as f:
-                        f.write("\n".join(lines))
-                    return True, filepath
-
-                return False, ""
-            except Exception:
-                return False, ""
-
-    return False, ""
-
-
 def _get_task_title(task_id: str) -> str:
     """Get task title from tasks data."""
     data = get_data()
@@ -1134,49 +1133,6 @@ def _get_task_title(task_id: str) -> str:
         if t.get("id") == task_id:
             return t.get("title", task_id)
     return task_id
-
-
-def _get_current_task_status(task_id: str) -> str:
-    """Read the current status from a task file. Checks 任务执行 section first, then pre-exec sections."""
-    tasks_dir = os.path.join(_get_cyber_team_dir(), "tasks")
-    if not os.path.exists(tasks_dir):
-        return ""
-
-    for filename in os.listdir(tasks_dir):
-        if filename.endswith(".md") and task_id in filename:
-            filepath = os.path.join(tasks_dir, filename)
-            try:
-                with open(filepath, "r") as f:
-                    content = f.read()
-
-                lines = content.split("\n")
-                # First: check 任务执行 section
-                in_execution_section = False
-                for line in lines:
-                    if "## 任务执行" in line:
-                        in_execution_section = True
-                        continue
-                    if in_execution_section and line.startswith("## "):
-                        break
-                    if in_execution_section and "**状态**:" in line:
-                        m = re.search(r"\*\*状态\*\*:\s*(.+)", line)
-                        return m.group(1).strip() if m else ""
-
-                # Fallback: check all sections before 任务执行 for **状态**:
-                in_pre_section = True
-                for line in lines:
-                    if "## 任务执行" in line:
-                        break
-                    if "**状态**:" in line:
-                        m = re.search(r"\*\*状态\*\*:\s*(.+)", line)
-                        if m:
-                            return m.group(1).strip()
-
-                return ""
-            except Exception:
-                return ""
-
-    return ""
 
 
 # ─── Assets ──────────────────────────────────────────────────────────────────

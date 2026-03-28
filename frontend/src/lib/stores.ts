@@ -9,7 +9,7 @@ export const loading = writable(false);
 
 // ─── 导航 ────────────────────────────────────────────────────────────
 export const mission = writable<string>("");
-export const showWorkbench = writable<boolean>(false);
+export const showWorkbench = writable<boolean>(true);
 
 // ─── 待决策 ──────────────────────────────────────────────────────────
 export const pendingDecisions = writable<any[]>([]);
@@ -20,6 +20,12 @@ export const showHistorySidebar = writable<boolean>(false);
 export const statusDetailAgent = writable<string | null>(null);
 export const statusHistory = writable<any[]>([]);
 export const statusHistoryLoading = writable<boolean>(false);
+
+// ─── 沟通改进 ────────────────────────────────────────────────────────
+export const communicateRequest = writable<{
+  agentId: string;
+  message: string;
+} | null>(null);
 
 // ─── 数据加载 ────────────────────────────────────────────────────────
 export async function fetchAll() {

@@ -538,9 +538,9 @@ async def websocket_chat(ws: WebSocket):
                                         profile = AGENT_DISPLAY_NAMES.get(agent_id, {})
                                         add_message_to_channel(ch_id, agent_id, profile.get("name", agent_id), final_text, "assistant")
                                     if not buf and text:
+                                        # No streaming happened, send full text as single delta
                                         await ws.send_json({"type": "delta", "content": text, "agent": agent_id, "channelId": ch_id})
-                                    elif buf and text and text != buf:
-                                        await ws.send_json({"type": "delta", "content": text, "agent": agent_id, "channelId": ch_id})
+                                    # If buf has content, streaming already delivered it to client, just send done
                                     await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
                                 else:
                                     # lifecycle/end arrived first but didn't send done (no streaming content)

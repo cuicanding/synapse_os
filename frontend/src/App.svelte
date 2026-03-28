@@ -213,11 +213,9 @@
           id="workbench-trigger"
           class="workbench-trigger"
           on:click={() => showWorkbench.update((v) => !v)}
+          title="收起/展开工作台"
         >
-          👑 果爸工作台
-          {#if $pendingDecisions.length > 0}
-            <span class="workbench-badge">{$pendingDecisions.length}</span>
-          {/if}
+          ◀
         </button>
 
         <div class="flex items-center gap-4 text-xs font-mono">

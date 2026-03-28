@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { tasks, missions, loading } from "../lib/stores";
+  import { tasks, missions, loading, communicateRequest } from "../lib/stores";
   import MarkdownDetail from "../components/MarkdownDetail.svelte";
+  import { marked } from "marked";
+  import DOMPurify from "dompurify";
   import PhaseCard from "../components/PhaseCard.svelte";
   import DiscussionPanel from "../components/DiscussionPanel.svelte";
   import {
@@ -11,6 +13,7 @@
     acceptTask,
     archiveTask,
     completeTask,
+    abandonTask,
     type PhaseInfo,
   } from "../lib/api";
 
@@ -26,11 +29,14 @@
 
   // Viewed tasks tracking (localStorage)
   let viewedTasks: Set<string> = new Set();
+  let viewedTasksVersion = 0;  // trigger reactivity
+
   function loadViewedTasks() {
     try {
       const stored = localStorage.getItem("viewedTasks");
       if (stored) {
         viewedTasks = new Set(JSON.parse(stored));
+        viewedTasksVersion++;
       }
     } catch (e) {
       console.warn("Failed to load viewedTasks:", e);
@@ -47,12 +53,25 @@
     if (!viewedTasks.has(taskId)) {
       viewedTasks.add(taskId);
       saveViewedTasks();
+      viewedTasksVersion++;
     }
+  }
+
+  function isViewed(taskId: string): boolean {
+    // Reference viewedTasksVersion to trigger dependency tracking
+    viewedTasksVersion;
+    return viewedTasks.has(taskId);
   }
 
   // Phase info for expanded task
   let phaseInfo: PhaseInfo[] = [];
   let phaseLoading = false;
+
+  // Markdown rendering
+  marked.setOptions({ breaks: true, gfm: true });
+  function renderMd(text: string): string {
+    return DOMPurify.sanitize(marked.parse(text) as string);
+  }
 
   // Artifact preview
   let previewArtifact: { name: string; path: string } | null = null;
@@ -129,6 +148,14 @@
       }
     }
 
+    // Pattern 5: Fallback — any backtick-quoted .md path (e.g. "详见 `assets/xxx.md`")
+    const p5 = /`([^`]+\.md)`/g;
+    while ((m = p5.exec(content)) !== null) {
+      if (!artifacts.some(a => a.path === m[1])) {
+        artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] });
+      }
+    }
+
     return artifacts;
   }
 
@@ -196,6 +223,39 @@
     }
   }
 
+  async function handleAbandon(taskId: string) {
+    try {
+      await abandonTask(taskId);
+    } catch (e) {
+      console.error("Abandon failed:", e);
+    }
+  }
+
+  // Communicate / Improve - trigger via store → WorkbenchPanel
+  function handleCommunicate(task: any) {
+    const assignee = task.assignee || task.creator || "";
+    // Map assignee name to agent id
+    const agentMap: Record<string, string> = {
+      "周华健": "quant-lead",
+      "里德": "reed",
+      "里德（Reed）": "reed",
+      "苏珊": "susan",
+      "果爸": "main",
+    };
+    let agentId = "";
+    for (const [name, id] of Object.entries(agentMap)) {
+      if (assignee.includes(name)) {
+        agentId = id;
+        break;
+      }
+    }
+    if (!agentId) {
+      agentId = assignee.toLowerCase().replace(/[^a-z0-9]/g, "");
+    }
+    const msg = `【沟通改进请求】\n任务ID: ${task.id}\n任务: ${task.title}\n当前状态: ${task.status}\n负责人: ${assignee}\n\n请查看该任务并沟通改进方案。`;
+    communicateRequest.set({ agentId, message: msg });
+  }
+
   // Load viewed tasks on mount
   loadViewedTasks();
 
@@ -230,10 +290,12 @@
   };
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
-  $: sorted = [...filtered].sort((a, b) => {
-    // NEW (unviewed) tasks always on top
-    const aIsNew = !viewedTasks.has(a.id);
-    const bIsNew = !viewedTasks.has(b.id);
+  $: sorted = (() => {
+    viewedTasksVersion; // trigger dependency
+    const result = [...filtered].sort((a, b) => {
+      // NEW (unviewed) tasks always on top
+      const aIsNew = !viewedTasks.has(a.id);
+      const bIsNew = !viewedTasks.has(b.id);
     if (aIsNew && !bIsNew) return -1;
     if (!aIsNew && bIsNew) return 1;
 
@@ -247,26 +309,31 @@
       const bTime = b.created_at || b.updated_at || "";
       return bTime.localeCompare(aTime);
     }
-  });
+    });
+    return result;
+  })();
 
   // Stats
   $: totalCount = $tasks.length;
-  $: inProgressCount = $tasks.filter(t => t.status === "in-progress").length;
-  $: pendingCount = $tasks.filter(t => t.status === "pending" || t.status === "assigned").length;
+  $: pendingAcceptCount = $tasks.filter(t => t.status === "pending-acceptance" || t.status === "pending-approval").length;
   $: completedCount = $tasks.filter(t => t.status === "completed" || t.status === "accepted").length;
-  $: decisionCount = $tasks.filter(t => t.decision_status === "pending").length;
+  $: archivedCount = $tasks.filter(t => t.status === "archived").length;
+  $: otherCount = totalCount - pendingAcceptCount - completedCount - archivedCount;
 
   // Helpers
   const statusLabel: Record<string, string> = {
     pending: "待分配", assigned: "已分配", "in-progress": "进行中",
-    completed: "已完成", accepted: "已验收",
+    completed: "已完成", accepted: "已验收", "pending-approval": "待审批",
+    "pending-acceptance": "待验收", rejected: "已驳回", discussing: "讨论中",
+    archived: "已归档",
   };
   const statusClass: Record<string, string> = {
     pending: "status-pending", assigned: "status-in_progress",
     "in-progress": "status-in_progress", completed: "status-completed",
-    accepted: "status-completed",
+    accepted: "status-completed", "pending-approval": "status-pending",
+    "pending-acceptance": "status-in_progress", rejected: "status-blocked",
+    discussing: "status-in_progress", archived: "status-pending",
   };
-  const priorityEmoji: Record<string, string> = { high: "🔴", medium: "🟡", low: "🟢" };
   const sourceLabel: Record<string, string> = { "real-business": "真实业务", "synapse-os": "SynapseOS 迭代" };
 
   function missionTitle(id: string): string {
@@ -289,26 +356,26 @@
   </div>
 
   <!-- Stats -->
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+  <div class="grid grid-cols-5 gap-4">
     <div class="glass-card p-4 space-y-1 text-center">
       <p class="font-orbitron text-2xl font-bold neon-cyan">{totalCount}</p>
       <p class="text-xs text-txt-secondary font-mono">总任务</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
-      <p class="font-orbitron text-2xl font-bold neon-amber">{inProgressCount}</p>
-      <p class="text-xs text-txt-secondary font-mono">进行中</p>
-    </div>
-    <div class="glass-card p-4 space-y-1 text-center">
-      <p class="font-orbitron text-2xl font-bold text-txt-secondary">{pendingCount}</p>
-      <p class="text-xs text-txt-secondary font-mono">待处理</p>
+      <p class="font-orbitron text-2xl font-bold neon-amber">{pendingAcceptCount}</p>
+      <p class="text-xs text-txt-secondary font-mono">待验收</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
       <p class="font-orbitron text-2xl font-bold neon-green">{completedCount}</p>
       <p class="text-xs text-txt-secondary font-mono">已完成</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
-      <p class="font-orbitron text-2xl font-bold neon-violet">{decisionCount}</p>
-      <p class="text-xs text-txt-secondary font-mono">待决策</p>
+      <p class="font-orbitron text-2xl font-bold text-txt-secondary">{otherCount}</p>
+      <p class="text-xs text-txt-secondary font-mono">已归档</p>
+    </div>
+    <div class="glass-card p-4 space-y-1 text-center">
+      <p class="font-orbitron text-2xl font-bold text-cyber-red/60">{archivedCount}</p>
+      <p class="text-xs text-txt-secondary font-mono">已废弃</p>
     </div>
   </div>
 
@@ -329,11 +396,15 @@
       <select bind:value={filterStatus}
         class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
         <option value="">全部</option>
-        <option value="in-progress">进行中</option>
         <option value="pending">待分配</option>
         <option value="assigned">已分配</option>
+        <option value="in-progress">进行中</option>
+        <option value="pending-acceptance">待验收</option>
+        <option value="pending-approval">待审批</option>
         <option value="completed">已完成</option>
         <option value="accepted">已验收</option>
+        <option value="rejected">已驳回</option>
+        <option value="archived">已归档</option>
       </select>
     </div>
     <div class="flex items-center gap-2">
@@ -364,10 +435,6 @@
       <button on:click={() => sortBy = "status"}
         class="px-2 py-1 rounded text-xs font-mono {sortBy === 'status' ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan/30' : 'bg-bg-light/30 text-txt-secondary border border-white/10'} transition-colors">
         状态
-      </button>
-      <button on:click={() => sortBy = "priority"}
-        class="px-2 py-1 rounded text-xs font-mono {sortBy === 'priority' ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan/30' : 'bg-bg-light/30 text-txt-secondary border border-white/10'} transition-colors">
-        优先级
       </button>
       <button on:click={() => sortBy = "time"}
         class="px-2 py-1 rounded text-xs font-mono {sortBy === 'time' ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan/30' : 'bg-bg-light/30 text-txt-secondary border border-white/10'} transition-colors">
@@ -403,10 +470,9 @@
                 <div class="flex items-center gap-2 flex-wrap mb-1">
                   <span class="font-mono text-xs text-cyber-cyan/60">{task.id}</span>
                   <!-- NEW badge for unviewed tasks -->
-                  {#if !viewedTasks.has(task.id)}
+                  {#if !isViewed(task.id)}
                     <span class="px-1.5 py-0.5 rounded text-xs bg-cyber-red/20 border border-cyber-red/30 text-cyber-red font-bold animate-pulse">NEW</span>
                   {/if}
-                  <span class="text-xs">{priorityEmoji[task.priority] || "⚪"}</span>
                   <span class="status-badge {statusClass[task.status] || 'status-pending'} text-xs">
                     {statusLabel[task.status] || task.status}
                   </span>
@@ -423,7 +489,7 @@
                 </div>
                 <h3 class="font-rajdhani text-base font-semibold leading-tight">{task.title}</h3>
                 <div class="flex items-center gap-3 mt-2 text-xs font-mono text-txt-secondary">
-                  <span>👤 {task.assignee || "待分配"}</span>
+                  <span>👤 {task.assignee || task.creator || "—"}</span>
                   {#if task.domain}
                     <span class="px-1.5 py-0.5 rounded bg-cyber-cyan/10 border border-cyber-cyan/20 text-cyber-cyan/80">{DOMAIN_LABELS[task.domain] || task.domain}</span>
                   {/if}
@@ -441,16 +507,17 @@
           {#if isExpanded}
             <div class="px-4 pb-4 pt-0 border-t border-white/5 space-y-3">
               {#if task.content}
-                <MarkdownDetail title="📋 任务描述" content={task.content} accentColor="cyan" />
+                <MarkdownDetail title="📋 任务描述" content={task.content} accentColor="cyan" initialOpen={true} />
               {/if}
               {#if task.proposal_content}
-                <MarkdownDetail title="💡 提案内容" content={task.proposal_content} accentColor="amber" />
+                <MarkdownDetail title="💡 提案内容" content={task.proposal_content} accentColor="amber" initialOpen={true} />
               {/if}
               {#if task.decision_detail}
                 <MarkdownDetail
                   title="{task.decision_status === 'pending' ? '⏳ 待决策' : '✅ 已决策'}"
                   content={task.decision_detail}
                   accentColor={task.decision_status === 'pending' ? 'amber' : 'green'}
+                  initialOpen={true}
                 />
               {/if}
 
@@ -515,49 +582,37 @@
               <!-- Action Buttons -->
               <div class="mt-4 pt-3 border-t border-white/5">
                 <div class="flex flex-wrap gap-2">
-                  {#if task.status === 'pending-approval'}
-                    <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
-                      on:click|stopPropagation={() => handleApprove(task.id)}
-                    >
-                      ✅ 审批通过
-                    </button>
-                    <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-red/15 border border-cyber-red/30 text-cyber-red hover:bg-cyber-red/25 transition-colors"
-                      on:click|stopPropagation={() => handleReject(task.id)}
-                    >
-                      ❌ 驳回
-                    </button>
-                  {:else if task.status === 'pending-acceptance'}
+                  {#if task.status !== 'archived' && task.status !== 'completed' && task.status !== 'accepted'}
                     <button
                       class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
                       on:click|stopPropagation={() => handleAccept(task.id)}
                     >
-                      ✅ 验收通过
+                      ✅ 提交成功
                     </button>
-                  {:else if task.status === 'in-progress'}
+
                     <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-cyan/15 border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/25 transition-colors"
-                      on:click|stopPropagation={() => handleComplete(task.id)}
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-red/10 border border-cyber-red/20 text-cyber-red/70 hover:bg-cyber-red/20 transition-colors"
+                      on:click|stopPropagation={() => handleAbandon(task.id)}
                     >
-                      📤 标记完成
+                      🚫 废弃
                     </button>
                   {/if}
 
-                  {#if task.status === 'completed' || task.status === 'accepted'}
-                    <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-white/5 border border-white/10 text-txt-secondary hover:bg-white/10 transition-colors"
-                      on:click|stopPropagation={() => handleArchive(task.id)}
-                    >
-                      🗄️ 归档废弃
-                    </button>
-                  {/if}
+                  <button
+                    class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber/80 hover:bg-cyber-amber/20 transition-colors"
+                    on:click|stopPropagation={() => handleCommunicate(task)}
+                  >
+                    💬 沟通改进
+                  </button>
                 </div>
               </div>
 
               <div class="flex items-center gap-4 text-xs font-mono text-txt-secondary">
                 {#if task.creator}
                   <span>创建者: <span class="text-cyber-violet">{task.creator}</span></span>
+                {/if}
+                {#if task.assignee && task.assignee !== task.creator}
+                  <span>负责人: <span class="text-cyber-amber">{task.assignee}</span></span>
                 {/if}
                 {#if task.mission_title}
                   <span>使命: <span class="text-cyber-cyan">{task.mission_title}</span></span>
@@ -590,7 +645,9 @@
         {:else if previewError}
           <div class="text-center py-8 text-cyber-red">{previewError}</div>
         {:else}
-          <pre class="text-xs font-mono text-txt-primary whitespace-pre-wrap break-words">{previewContent}</pre>
+          <div class="markdown-body text-sm leading-relaxed">
+            {@html renderMd(previewContent)}
+          </div>
         {/if}
       </div>
     </div>

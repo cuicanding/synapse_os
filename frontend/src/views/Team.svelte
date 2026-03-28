@@ -8,7 +8,6 @@
 
   let loading = true;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
-  let registry: Record<string, any> = {};
   let collapsed: Record<string, boolean> = {};
   let agentStatusMd: Record<string, { work_status: string; current_task: string; last_update: string; raw: string }> = {};
 
@@ -65,6 +64,15 @@
     }
   }
 
+  function collaborationStatusLabel(status: string): string {
+    switch (status) {
+      case "completed": return "已完成";
+      case "running": return "进行中";
+      case "failed": return "失败";
+      default: return status;
+    }
+  }
+
   // ─── Domain 定义 ─────────────────────────────────────────────────────────
   const DOMAIN_META: Record<string, { name: string; emoji: string; color: string; desc: string }> = {
     infrastructure: { name: "基础设施域", emoji: "🔧", color: "#00E5FF", desc: "SynapseOS 等 AI-Native 管理工具" },
@@ -75,44 +83,18 @@
     quant:           { name: "金蟾量化团队", emoji: "🦎", color: "#f59e0b", desc: "量化策略研究、开发与数据基建" },
   };
 
-  const ROLE_SLOTS: Record<string, { roleKey: string; roleLabel: string; domain: string }[]> = {
-    infrastructure: [
-      { roleKey: "infrastructure-architect",        roleLabel: "架构师",   domain: "infrastructure" },
-      { roleKey: "infrastructure-product-designer", roleLabel: "产品设计", domain: "infrastructure" },
-      { roleKey: "infrastructure-developer",        roleLabel: "开发者",   domain: "infrastructure" },
-    ],
-    online: [
-      { roleKey: "online-architect",   roleLabel: "架构师", domain: "online" },
-      { roleKey: "online-developer",  roleLabel: "开发者", domain: "online" },
-    ],
-    offline: [
-      { roleKey: "offline-architect",  roleLabel: "架构师", domain: "offline" },
-      { roleKey: "offline-developer",  roleLabel: "开发者", domain: "offline" },
-    ],
-    growth: [
-      { roleKey: "growth-architect",  roleLabel: "架构师", domain: "growth" },
-      { roleKey: "growth-developer",  roleLabel: "开发者", domain: "growth" },
-    ],
-    marketing: [
-      { roleKey: "marketing-architect",  roleLabel: "架构师", domain: "marketing" },
-      { roleKey: "marketing-developer",  roleLabel: "开发者", domain: "marketing" },
-    ],
-    quant: [
-      { roleKey: "quant-analyst",       roleLabel: "策略分析师",     domain: "quant" },
-      { roleKey: "quant-developer",     roleLabel: "策略开发师",     domain: "quant" },
-      { roleKey: "quant-data-engineer", roleLabel: "策略数据工程师", domain: "quant" },
-    ],
-  };
+  // ─── 从 team.json 加载员工列表（唯一真理源） ─────────────────────────────
+  let teamAgents: any[] = [];
 
-  // ─── 从 registry 拉取完整角色表 ─────────────────────────────────────────
-  async function loadRegistry() {
+  async function loadTeamAgents() {
     try {
-      const r = await fetch("/api/registry");
+      const r = await fetch("/api/agents");
       if (r.ok) {
-        registry = await r.json();
+        const data = await r.json();
+        teamAgents = data.agents || [];
       }
     } catch (e) {
-      console.warn("[team] registry load failed, using empty:", e);
+      console.warn("[team] team.json load failed:", e);
     }
   }
 
@@ -212,62 +194,67 @@
     return names.join("、");
   }
 
+  // 角色标签中文映射
+  const ROLE_LABELS: Record<string, string> = {
+    "architect": "架构师",
+    "developer": "开发者",
+    "product-designer": "产品设计师",
+    "quant-analyst": "策略分析师",
+    "quant-developer": "策略开发师",
+    "quant-data-engineer": "策略数据工程师",
+  };
+
   $: allCards = ((): RoleSlotCard[] => {
     const cards: RoleSlotCard[] = [];
-    for (const [domain, slots] of Object.entries(ROLE_SLOTS)) {
-      for (const slot of slots) {
-        const reg = registry[slot.roleKey] || {};
-        const agentId = reg.agentId || null;
-        const assignedTo = reg.assigned_to || null;
+    for (const agent of teamAgents) {
+      const agentId = agent.id;
+      const domains: string[] = agent.domains || [];
+      const roles: string[] = agent.roles || [];
 
-        // Skip vacant slots (no assigned_to)
-        if (!assignedTo) continue;
-
-        // 匹配策略：agentId 精确匹配 > 名字包含匹配
-        let reported: AgentStatus | null = null;
-        if (agentId && reportedMap[agentId]) {
-          reported = reportedMap[agentId];
-        } else if (assignedTo) {
-          // 遍历 status panel，找一个 agent_name 能匹配 assignedTo 的
-          const agents = $statusPanel?.agents || [];
-          for (const a of agents) {
-            if (a.agent_name && nameMatches(assignedTo, a.agent_name)) {
-              reported = a;
-              break;
-            }
+      // 匹配 status panel
+      let reported: AgentStatus | null = null;
+      if (reportedMap[agentId]) {
+        reported = reportedMap[agentId];
+      } else {
+        const agents = $statusPanel?.agents || [];
+        for (const a of agents) {
+          if (a.agent_name && (a.agent_id === agentId || nameMatches(agent.name, a.agent_name))) {
+            reported = a;
+            break;
           }
         }
-        if (assignedTo) {
-          console.log(`[team] match ${slot.roleKey}: assigned="${assignedTo}" → reported=${reported?.agent_name || 'NONE'} (agentId=${agentId})`);
-        }
+      }
 
-        let onlineStatus: RoleSlotCard["onlineStatus"] = "unassigned";
-        if (reported) {
-          onlineStatus = reported.is_stale ? "stale" : "online";
-        } else if (agentId || assignedTo) {
-          // 有分配但没有上报记录
-          onlineStatus = "stale";
-        }
+      let onlineStatus: RoleSlotCard["onlineStatus"] = "unassigned";
+      if (reported) {
+        onlineStatus = reported.is_stale ? "stale" : "online";
+      } else if (agent.type === "openclaw") {
+        onlineStatus = "stale";
+      }
 
-        cards.push({
-          roleKey: slot.roleKey,
-          roleLabel: slot.roleLabel,
-          domain,
-          agentName: reg.assigned_to || null,
-          agentNames: normalizeNames(reg.assigned_to),
-          agentId,
-          status: reported,
-          isStale: onlineStatus === "stale",
-          onlineStatus,
-          progress: reported?.progress || "idle",
-          progressDetail: reported?.progress_detail || "",
-          difficultyLevel: reported?.difficulty_level || "none",
-          difficulty: reported?.difficulty || null,
-          needsDecision: reported?.needs_decision || null,
-          currentTask: reported?.current_task || "",
-          lastReportAt: reported?.last_report_at || null,
-          statusMd: agentId ? (agentStatusMd[agentId] || null) : null,
-        });
+      // 每个 domain × role 组合生成一张卡片
+      for (const domain of domains) {
+        for (const role of roles) {
+          cards.push({
+            roleKey: `${domain}-${role}`,
+            roleLabel: ROLE_LABELS[role] || role,
+            domain,
+            agentName: agent.fullName || agent.name,
+            agentNames: [agent.name],
+            agentId,
+            status: reported,
+            isStale: onlineStatus === "stale",
+            onlineStatus,
+            progress: reported?.progress || "idle",
+            progressDetail: reported?.progress_detail || "",
+            difficultyLevel: reported?.difficulty_level || "none",
+            difficulty: reported?.difficulty || null,
+            needsDecision: reported?.needs_decision || null,
+            currentTask: reported?.current_task || "",
+            lastReportAt: reported?.last_report_at || null,
+            statusMd: agentId ? (agentStatusMd[agentId] || null) : null,
+          });
+        }
       }
     }
     return cards;
@@ -400,11 +387,11 @@
 
   onMount(() => {
     startStatusWs();
-    loadRegistry();
+    loadTeamAgents();
     loadAgentStatus();
     refresh();
     fetchCollaborations();
-    refreshTimer = setInterval(() => { refresh(); loadRegistry(); loadAgentStatus(); fetchCollaborations(); }, 30000);
+    refreshTimer = setInterval(() => { refresh(); loadTeamAgents(); loadAgentStatus(); fetchCollaborations(); }, 30000);
   });
 
   onDestroy(() => {
@@ -451,7 +438,7 @@
             <span class="text-white/10">|</span>
             <span class="flex items-center gap-1 text-xs font-mono">
               <span class="w-1.5 h-1.5 rounded-full bg-cyber-amber"></span>
-              <span class="text-cyber-amber font-bold">{staleSlots}</span> 未报到
+              <span class="text-cyber-amber font-bold">{staleSlots}</span> 离线
             </span>
           {/if}
           {#if unassignedSlots > 0}
@@ -498,56 +485,34 @@
       {/each}
     </div>
   {:else}
-    <!-- Collaboration Timeline (show once before domain cards) -->
+    <!-- Collaboration Timeline (compact single-line list) -->
     {#if collaborations.length > 0}
-      <div class="glass-card p-5 mb-4">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="font-rajdhani text-lg font-bold text-txt-primary flex items-center gap-2">
-            <span>🔄</span> 协作动态
-          </h3>
-          {#if collaborations.length > 10}
-            <button
-              class="text-xs text-cyber-cyan hover:underline"
-              on:click={() => showAllCollaborations = !showAllCollaborations}
-            >
-              {showAllCollaborations ? '收起' : `查看全部 (${collaborations.length})`}
-            </button>
-          {/if}
+      <div class="glass-card p-4 mb-4">
+        <h3 class="font-rajdhani text-sm font-bold text-txt-primary flex items-center gap-2 mb-3">
+          <span>🔄</span> 协作动态
+        </h3>
+        <div class="space-y-1">
+          {#each (showAllCollaborations ? collaborations : collaborations.slice(0, 10)) as collab}
+            <div class="flex items-center gap-2 text-xs font-mono py-1 px-2 rounded hover:bg-white/5 transition-colors">
+              <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background-color: {collaborationStatusColor(collab.status)}"></span>
+              <span class="text-cyber-cyan truncate max-w-[100px]">{collab.initiator}</span>
+              <span class="text-txt-secondary/40">→</span>
+              <span class="text-cyber-violet truncate max-w-[100px]">{collab.executor}</span>
+              <span class="text-txt-secondary flex-shrink-0">|</span>
+              <span class="text-txt-primary truncate flex-1">{collab.task_summary?.slice(0, 40) || '—'}{collab.task_summary?.length > 40 ? '…' : ''}</span>
+              <span class="px-1 py-0.5 rounded flex-shrink-0" style="background-color: {collaborationStatusColor(collab.status)}15; color: {collaborationStatusColor(collab.status)}">{collaborationStatusLabel(collab.status)}</span>
+              <span class="text-txt-secondary/50 flex-shrink-0">{formatRelativeTime(collab.created_at)}</span>
+            </div>
+          {/each}
         </div>
-        <div class="relative">
-          <div class="absolute left-[6px] top-2 bottom-2 w-0.5 bg-white/10"></div>
-          <div class="space-y-3">
-            {#each (showAllCollaborations ? collaborations : collaborations.slice(0, 10)) as collab, idx}
-              <div class="flex gap-3 relative">
-                <div
-                  class="w-3 h-3 rounded-full flex-shrink-0 mt-1.5 z-10"
-                  style="background-color: {collaborationStatusColor(collab.status)}"
-                ></div>
-                <div class="flex-1 glass-card p-3 rounded-lg border border-white/5">
-                  <div class="flex items-center justify-between mb-1">
-                    <span class="text-xs font-mono">
-                      <span class="text-cyber-cyan">{collab.initiator}</span>
-                      <span class="text-txt-secondary mx-1">→</span>
-                      <span class="text-cyber-violet">{collab.executor}</span>
-                    </span>
-                    <span
-                      class="px-1.5 py-0.5 rounded text-xs font-mono"
-                      style="background-color: {collaborationStatusColor(collab.status)}20; color: {collaborationStatusColor(collab.status)}; border: 1px solid {collaborationStatusColor(collab.status)}40"
-                    >
-                      {collab.status}
-                    </span>
-                  </div>
-                  <p class="text-sm text-txt-primary line-clamp-2">
-                    {collab.task_summary?.slice(0, 50) || '—'}{collab.task_summary?.length > 50 ? '...' : ''}
-                  </p>
-                  <p class="text-xs text-txt-secondary/60 mt-1 font-mono">
-                    {formatRelativeTime(collab.created_at)}
-                  </p>
-                </div>
-              </div>
-            {/each}
-          </div>
-        </div>
+        {#if collaborations.length > 10}
+          <button
+            class="text-xs text-cyber-cyan hover:underline mt-2"
+            on:click={() => showAllCollaborations = !showAllCollaborations}
+          >
+            {showAllCollaborations ? '收起' : `查看全部 (${collaborations.length})`}
+          </button>
+        {/if}
       </div>
     {/if}
 
@@ -587,7 +552,7 @@
         <!-- Role Cards Grid -->
         {#if !collapsed_d}
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {#each cards as card (card.roleKey)}
+            {#each cards as card (card.roleKey + '-' + card.agentId)}
               {@const isUnassigned = card.onlineStatus === "unassigned"}
               {@const isStale = card.onlineStatus === "stale"}
               {@const isOnline = card.onlineStatus === "online"}
@@ -607,7 +572,7 @@
                   {#if isOnline}
                     <span class="w-2 h-2 rounded-full bg-cyber-green pulse-glow"></span>
                   {:else if isStale}
-                    <span class="w-2 h-2 rounded-full bg-cyber-amber" title="未报到"></span>
+                    <span class="w-2 h-2 rounded-full bg-cyber-amber" title="离线"></span>
                   {:else}
                     <span class="w-2 h-2 rounded-full bg-white/10" title="未分配"></span>
                   {/if}
@@ -650,21 +615,22 @@
                 <!-- 任务信息（仅已分配人员显示）-->
                 {#if !isUnassigned}
                   {@const smd = card.statusMd}
-                  {@const isBusy = smd ? smd.work_status.includes("忙碌") : isStale}
+                  {@const isBusy = smd ? smd.work_status.includes("忙碌") : false}
                   {@const isIdle = smd ? smd.work_status.includes("空闲") : false}
+                  {@const hasAgent = !!card.agentId}
                   <div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
                     <!-- 红绿灯 + 动态 -->
                     <div class="flex items-start gap-2">
-                      <span class="text-sm mt-0.5 flex-shrink-0">{smd ? (isBusy ? '🔴' : '🟢') : '⚪'}</span>
+                      <span class="text-sm mt-0.5 flex-shrink-0">{smd ? (isBusy ? '🔴' : '🟢') : (hasAgent ? '⚪' : '⚪')}</span>
                       <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2 flex-1" title={smd?.current_task || card.currentTask || '暂无'}>
-                        {smd?.current_task || card.currentTask || '暂无动态'}
+                        {smd?.current_task || card.currentTask || (hasAgent ? '暂无动态' : '—')}
                       </p>
                     </div>
 
                     <!-- 状态 + 时间 -->
                     <div class="flex items-center justify-between">
                       <span class="text-xs {isBusy ? 'text-cyber-amber' : isIdle ? 'text-cyber-green' : 'text-txt-secondary'}">
-                        {smd ? smd.work_status : (card.isStale ? '⚪ 未报到' : '⚪ 未知')}
+                        {smd ? smd.work_status : (hasAgent ? '⚪ 离线' : '⚪ 无接入')}
                       </span>
                       <span class="text-xs text-txt-secondary/50 font-mono">
                         {smd?.last_update || timeAgo(card.lastReportAt)}
@@ -677,7 +643,7 @@
                 {#if card.agentId}
                   <div class="mt-3 pt-2 border-t border-white/5">
                     <button
-                      onclick={() => openTodayModal(card)}
+                      on:click|stopPropagation={() => openTodayModal(card)}
                       class="w-full text-xs py-1.5 rounded bg-white/5 hover:bg-cyber-cyan/10 text-txt-secondary hover:text-cyber-cyan transition-colors"
                     >
                       📋 今日详情

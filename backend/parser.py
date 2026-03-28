@@ -376,9 +376,28 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
     # Creator
     creator = ""
     for line in content.split("\n"):
-        m = re.match(r"\*\*创建者\*\*:\s*(.+)", line)
+        m = re.match(r"\s*[-*]\s*\*\*创建者\*\*:\s*(.+)", line)
+        if not m:
+            m = re.match(r"\*\*创建者\*\*:\s*(.+)", line)
         if m:
             creator = _strip(m.group(1))
+            break
+        m = re.match(r"\s*[-*]\s*\*\*创建人/负责人\*\*:\s*(.+)", line)
+        if not m:
+            m = re.match(r"\*\*创建人/负责人\*\*:\s*(.+)", line)
+        if m:
+            raw = _strip(m.group(1))
+            # Extract name before parentheses, e.g. "周华健（策略分析师）" → "周华健"
+            cm = re.match(r"([^（(]+)", raw)
+            creator = _strip(cm.group(1)) if cm else raw
+            break
+        m = re.match(r"\s*[-*]\s*\*\*创建人\*\*:\s*(.+)", line)
+        if not m:
+            m = re.match(r"\*\*创建人\*\*:\s*(.+)", line)
+        if m:
+            raw = _strip(m.group(1))
+            cm = re.match(r"([^（(]+)", raw)
+            creator = _strip(cm.group(1)) if cm else raw
             break
 
     # Updated at
@@ -453,7 +472,7 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
         id=task_id_str,
         title=title or filepath.stem,
         status=status,
-        assignee=assignee or "待分配",
+        assignee=assignee or creator or "待分配",
         priority=priority,
         created_at=created_at_val,
         updated_at=updated_at,

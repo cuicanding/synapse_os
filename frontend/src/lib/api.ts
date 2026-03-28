@@ -367,3 +367,12 @@ export async function completeTask(taskId: string): Promise<TaskActionResponse> 
   });
   return r.json();
 }
+
+export async function abandonTask(taskId: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/abandon`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return r.json();
+}
