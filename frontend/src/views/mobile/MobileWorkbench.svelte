@@ -284,6 +284,28 @@
       .replace(/\n/g, "<br/>");
   }
 
+  async function syncFromSession() {
+    if (!currentChannelId || !currentChannelId.startsWith("dm-")) return;
+    var agentId = currentChannelId.replace("dm-", "");
+    try {
+      var resp = await fetch("/api/chat/sync-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId })
+      });
+      if (!resp.ok) return;
+      var data = await resp.json();
+      if ((data.synced || 0) > 0) {
+        // 重新 join 频道加载 JSONL
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
+        }
+      }
+    } catch (e) {
+      console.error("[mobile] syncFromSession failed:", e);
+    }
+  }
+
   function getChannelLabel(channelId: string): string {
     const ch = channels.find(c => c.id === channelId);
     if (ch) return ch.name;
@@ -397,6 +419,7 @@
         <button class="back-btn" on:click={() => { view = 'list'; }}>←</button>
         <span class="chat-icon">{getChannelIcon(currentChannelId)}</span>
         <span class="chat-title">{getChannelLabel(currentChannelId)}</span>
+        <button class="sync-btn" on:click={syncFromSession} title="同步">⟳</button>
         <span class="ws-dot-small {wsStatus}"></span>
       </div>
 
@@ -680,6 +703,21 @@
     align-items: center;
     justify-content: center;
     border-radius: 8px;
+  }
+
+  .sync-btn {
+    background: rgba(0,229,255,0.08);
+    border: 1px solid rgba(0,229,255,0.2);
+    color: #00E5FF;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 8px;
+    min-width: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
   }
 
   .chat-icon { font-size: 18px; }
