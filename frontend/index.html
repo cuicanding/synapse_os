@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>SynapseOS 2.0</title>
+    <!-- Using Chinese-friendly font CDN -->
+
+    <style>
+      /* System fonts fallback - no external font loading */
+      :root {
+        --font-orb: 'Orbitron', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --font-raj: 'Rajdhani', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --font-int: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --font-mono: 'JetBrains Mono', 'Menlo', 'Monaco', monospace;
+        --font-cn: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { 
+        margin: 0; 
+        font-family: var(--font-int);
+        -webkit-font-smoothing: antialiased;
+      }
+    </style>
+  </head>
+  <body class="bg-bg-deep text-txt-primary font-inter chinese">
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

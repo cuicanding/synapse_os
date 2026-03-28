@@ -1,0 +1,10 @@
+
+> synapse-os-frontend@2.0.0 dev
+> vite --port 5173 --host
+
+Port 5173 is in use, trying another one...
+
+  VITE v5.4.21  ready in 188 ms
+
+  ➜  Local:   http://localhost:5174/
+  ➜  Network: http://10.0.100.200:5174/

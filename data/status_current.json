@@ -1,0 +1,62 @@
+{
+  "updated_at": "2026-03-28T14:33:57.949871+08:00",
+  "agents": {
+    "reed": {
+      "agent_id": "reed",
+      "agent_name": "里德",
+      "role": "开发者",
+      "domain": "infrastructure",
+      "current_task": "task-infra-021 — SynapseOS 移动端适配",
+      "progress": "developing",
+      "progress_detail": "[task-infra-021] in-progress",
+      "difficulty": null,
+      "difficulty_level": "none",
+      "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
+      "needs_help": null,
+      "task_id": "task-infra-021",
+      "last_report_at": "2026-03-28T14:33:57.942410+08:00",
+      "next_report_at": "2026-03-28T14:48:57.942464+08:00",
+      "online_status": "online",
+      "is_stale": false,
+      "_task_status": "in-progress"
+    },
+    "susan": {
+      "agent_id": "susan",
+      "agent_name": "苏珊",
+      "role": "产品设计师",
+      "domain": "infrastructure",
+      "current_task": "task-infra-006：为迭代提案添加审批按钮后端联动",
+      "progress": "rejected",
+      "progress_detail": "[task-infra-006] 已驳回",
+      "difficulty": null,
+      "difficulty_level": "none",
+      "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
+      "needs_help": null,
+      "task_id": "task-infra-006",
+      "last_report_at": "2026-03-28T14:33:57.943321+08:00",
+      "next_report_at": "2026-03-28T14:48:57.943347+08:00",
+      "online_status": "online",
+      "is_stale": false,
+      "_task_status": "已驳回"
+    },
+    "guoba": {
+      "agent_id": "guoba",
+      "agent_name": "果爸",
+      "role": "董事长",
+      "domain": "",
+      "current_task": "任务类型区分（使命型 vs 需求型）+ 使命关联任务展示",
+      "progress": "developing",
+      "progress_detail": "[task-infra-019] `assigned`",
+      "difficulty": null,
+      "difficulty_level": "none",
+      "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
+      "needs_help": null,
+      "task_id": "task-infra-019",
+      "last_report_at": "2026-03-28T14:33:57.948300+08:00",
+      "next_report_at": "2026-03-28T14:48:57.948320+08:00",
+      "online_status": "online",
+      "is_stale": false,
+      "_task_status": "`assigned`"
+    }
+  }
+}
