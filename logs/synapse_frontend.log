@@ -33,3 +33,6 @@
 15:11:58 [vite] hmr update /src/views/Team.svelte, /src/app.css
 15:12:59 [vite] hmr update /src/views/Team.svelte, /src/app.css
 15:14:11 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css, /src/views/WorkbenchPanel.svelte?svelte&type=style&lang.css
+15:18:37 [vite] ws proxy socket error:
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
