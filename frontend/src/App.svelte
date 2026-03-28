@@ -6,6 +6,7 @@
   import Tasks from "./views/Tasks.svelte";
   import Decisions from "./views/Decisions.svelte";
   import Team from "./views/Team.svelte";
+  import AssetCenter from "./views/AssetCenter.svelte";
   import WorkbenchPanel from "./views/WorkbenchPanel.svelte";
   import LoginPage from "./views/LoginPage.svelte";
   import MobileApp from "./views/MobileApp.svelte";
@@ -69,8 +70,8 @@
     if (h === "#/" || h === "#" || h === "") return "mission";
     if (h.startsWith("#/mission/")) return "mission-detail";
     if (h.startsWith("#/tasks")) return "tasks";
-    if (h.startsWith("#/decisions")) return "decisions";
     if (h.startsWith("#/team")) return "team";
+    if (h.startsWith("#/assets")) return "assets";
     return "mission";
   }
 
@@ -200,11 +201,11 @@
           <a href="#/tasks" class="nav-link {currentTab === 'tasks' ? 'active' : ''}">
             <span class="mr-1">▤</span>任务
           </a>
-          <a href="#/decisions" class="nav-link {currentTab === 'decisions' ? 'active' : ''}">
-            <span class="mr-1">◈</span>待决策
-          </a>
           <a href="#/team" class="nav-link {currentTab === 'team' ? 'active' : ''}">
             <span class="mr-1">⬟</span>团队
+          </a>
+          <a href="#/assets" class="nav-link {currentTab === 'assets' ? 'active' : ''}">
+            <span class="mr-1">📦</span>资产
           </a>
         </nav>
 
@@ -237,10 +238,10 @@
           <Mission />
         {:else if currentTab === "tasks"}
           <Tasks />
-        {:else if currentTab === "decisions"}
-          <Decisions />
         {:else if currentTab === "team"}
           <Team />
+        {:else if currentTab === "assets"}
+          <AssetCenter />
         {:else}
           <Mission />
         {/if}

@@ -200,6 +200,9 @@
         const agentId = reg.agentId || null;
         const assignedTo = reg.assigned_to || null;
 
+        // Skip vacant slots (no assigned_to)
+        if (!assignedTo) continue;
+
         // 匹配策略：agentId 精确匹配 > 名字包含匹配
         let reported: AgentStatus | null = null;
         if (agentId && reportedMap[agentId]) {
@@ -415,6 +418,59 @@
       {/each}
     </div>
   {:else}
+    <!-- Collaboration Timeline (show once before domain cards) -->
+    {#if collaborations.length > 0}
+      <div class="glass-card p-5 mb-4">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-rajdhani text-lg font-bold text-txt-primary flex items-center gap-2">
+            <span>🔄</span> 协作动态
+          </h3>
+          {#if collaborations.length > 10}
+            <button
+              class="text-xs text-cyber-cyan hover:underline"
+              on:click={() => showAllCollaborations = !showAllCollaborations}
+            >
+              {showAllCollaborations ? '收起' : `查看全部 (${collaborations.length})`}
+            </button>
+          {/if}
+        </div>
+        <div class="relative">
+          <div class="absolute left-[6px] top-2 bottom-2 w-0.5 bg-white/10"></div>
+          <div class="space-y-3">
+            {#each (showAllCollaborations ? collaborations : collaborations.slice(0, 10)) as collab, idx}
+              <div class="flex gap-3 relative">
+                <div
+                  class="w-3 h-3 rounded-full flex-shrink-0 mt-1.5 z-10"
+                  style="background-color: {collaborationStatusColor(collab.status)}"
+                ></div>
+                <div class="flex-1 glass-card p-3 rounded-lg border border-white/5">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-xs font-mono">
+                      <span class="text-cyber-cyan">{collab.initiator}</span>
+                      <span class="text-txt-secondary mx-1">→</span>
+                      <span class="text-cyber-violet">{collab.executor}</span>
+                    </span>
+                    <span
+                      class="px-1.5 py-0.5 rounded text-xs font-mono"
+                      style="background-color: {collaborationStatusColor(collab.status)}20; color: {collaborationStatusColor(collab.status)}; border: 1px solid {collaborationStatusColor(collab.status)}40"
+                    >
+                      {collab.status}
+                    </span>
+                  </div>
+                  <p class="text-sm text-txt-primary line-clamp-2">
+                    {collab.task_summary?.slice(0, 50) || '—'}{collab.task_summary?.length > 50 ? '...' : ''}
+                  </p>
+                  <p class="text-xs text-txt-secondary/60 mt-1 font-mono">
+                    {formatRelativeTime(collab.created_at)}
+                  </p>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
+
     {#each domainOrder as domain}
       {@const meta = DOMAIN_META[domain] || { name: domain, emoji: "📦", color: "#64748b", desc: "" }}
       {@const cards = domainGroups[domain] || []}
@@ -447,65 +503,6 @@
             ▶
           </span>
         </button>
-
-        <!-- Collaboration Timeline (show once at top of first domain) -->
-        {#if collaborations.length > 0}
-          <div class="glass-card p-5 mb-4">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="font-rajdhani text-lg font-bold text-txt-primary flex items-center gap-2">
-                <span>🔄</span> 协作动态
-              </h3>
-              {#if collaborations.length > 10}
-                <button
-                  class="text-xs text-cyber-cyan hover:underline"
-                  on:click={() => showAllCollaborations = !showAllCollaborations}
-                >
-                  {showAllCollaborations ? '收起' : `查看全部 (${collaborations.length})`}
-                </button>
-              {/if}
-            </div>
-
-            <div class="relative">
-              <!-- Timeline line -->
-              <div class="absolute left-[6px] top-2 bottom-2 w-0.5 bg-white/10"></div>
-
-              <div class="space-y-3">
-                {#each (showAllCollaborations ? collaborations : collaborations.slice(0, 10)) as collab, idx}
-                  <div class="flex gap-3 relative">
-                    <!-- Timeline dot -->
-                    <div
-                      class="w-3 h-3 rounded-full flex-shrink-0 mt-1.5 z-10"
-                      style="background-color: {collaborationStatusColor(collab.status)}"
-                    ></div>
-
-                    <!-- Card -->
-                    <div class="flex-1 glass-card p-3 rounded-lg border border-white/5">
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="text-xs font-mono">
-                          <span class="text-cyber-cyan">{collab.initiator}</span>
-                          <span class="text-txt-secondary mx-1">→</span>
-                          <span class="text-cyber-violet">{collab.executor}</span>
-                        </span>
-                        <span
-                          class="px-1.5 py-0.5 rounded text-xs font-mono"
-                          style="background-color: {collaborationStatusColor(collab.status)}20; color: {collaborationStatusColor(collab.status)}; border: 1px solid {collaborationStatusColor(collab.status)}40"
-                        >
-                          {collab.status}
-                        </span>
-                      </div>
-                      <p class="text-sm text-txt-primary line-clamp-2">
-                        {collab.task_summary?.slice(0, 50) || '—'}{collab.task_summary?.length > 50 ? '...' : ''}
-                      </p>
-                      <p class="text-xs text-txt-secondary/60 mt-1 font-mono">
-                        {formatRelativeTime(collab.created_at)}
-                      </p>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          </div>
-        {/if}
 
         <!-- Role Cards Grid -->
         {#if !collapsed_d}

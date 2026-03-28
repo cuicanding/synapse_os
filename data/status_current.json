@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-28T14:53:36.085705+08:00",
+  "updated_at": "2026-03-28T14:57:36.105472+08:00",
   "agents": {
     "reed": {
       "agent_id": "reed",
@@ -7,18 +7,18 @@
       "role": "开发者",
       "domain": "infrastructure",
       "current_task": "task-infra-021 — SynapseOS 移动端适配",
-      "progress": "developing",
-      "progress_detail": "[task-infra-021] in-progress",
+      "progress": "pending-acceptance",
+      "progress_detail": "[task-infra-021] pending-acceptance",
       "difficulty": null,
       "difficulty_level": "none",
       "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
       "needs_help": null,
       "task_id": "task-infra-021",
-      "last_report_at": "2026-03-28T14:53:36.083270+08:00",
-      "next_report_at": "2026-03-28T15:08:36.083283+08:00",
+      "last_report_at": "2026-03-28T14:57:36.103106+08:00",
+      "next_report_at": "2026-03-28T15:12:36.103122+08:00",
       "online_status": "online",
       "is_stale": false,
-      "_task_status": "in-progress"
+      "_task_status": "pending-acceptance"
     },
     "susan": {
       "agent_id": "susan",
@@ -33,8 +33,8 @@
       "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
       "needs_help": null,
       "task_id": "task-infra-006",
-      "last_report_at": "2026-03-28T14:53:36.083491+08:00",
-      "next_report_at": "2026-03-28T15:08:36.083497+08:00",
+      "last_report_at": "2026-03-28T14:57:36.103272+08:00",
+      "next_report_at": "2026-03-28T15:12:36.103276+08:00",
       "online_status": "online",
       "is_stale": false,
       "_task_status": "已驳回"
@@ -52,8 +52,8 @@
       "needs_decision": "需要果爸拍板的点（无则显示\"✅ 无需决策\"）",
       "needs_help": null,
       "task_id": "task-infra-019",
-      "last_report_at": "2026-03-28T14:53:36.084430+08:00",
-      "next_report_at": "2026-03-28T15:08:36.084433+08:00",
+      "last_report_at": "2026-03-28T14:57:36.104160+08:00",
+      "next_report_at": "2026-03-28T15:12:36.104163+08:00",
       "online_status": "online",
       "is_stale": false,
       "_task_status": "`assigned`"
