@@ -382,9 +382,31 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
 
     # Updated at
     updated_at = _parse_field("更新时间", content) or fm.get("更新时间", "")
+    # If updated_at has no time component, append file mtime
+    if updated_at and re.match(r"^\d{4}-\d{2}-\d{2}$", updated_at.strip()):
+        try:
+            import time
+            mtime_str = time.strftime("%H:%M", time.localtime(filepath.stat().st_mtime))
+            updated_at = f"{updated_at.strip()} {mtime_str}"
+        except Exception:
+            pass
     # Created at - try from content first, fallback to frontmatter
     created_at_val = _parse_field("创建时间", content) or fm.get("创建时间", "")
-    # If updated_at is empty, fallback to created_at
+    # If created_at has no time component, append file mtime
+    if created_at_val and re.match(r"^\d{4}-\d{2}-\d{2}$", created_at_val.strip()):
+        try:
+            import time
+            mtime_str = time.strftime("%H:%M", time.localtime(filepath.stat().st_mtime))
+            created_at_val = f"{created_at_val.strip()} {mtime_str}"
+        except Exception:
+            pass
+    # If created_at is still empty, fallback to file mtime
+    if not created_at_val:
+        try:
+            import time
+            created_at_val = time.strftime("%Y-%m-%d %H:%M", time.localtime(filepath.stat().st_mtime))
+        except Exception:
+            pass
     if not updated_at:
         updated_at = created_at_val
 

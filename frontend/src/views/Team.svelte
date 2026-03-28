@@ -11,6 +11,53 @@
   let registry: Record<string, any> = {};
   let collapsed: Record<string, boolean> = {};
 
+  // Collaboration data
+  interface Collaboration {
+    id: string;
+    initiator: string;
+    executor: string;
+    task_summary: string;
+    status: string;
+    created_at: string;
+  }
+  let collaborations: Collaboration[] = [];
+  let showAllCollaborations = false;
+
+  async function fetchCollaborations() {
+    try {
+      const r = await fetch("/api/collaboration");
+      if (r.ok) {
+        const data = await r.json();
+        collaborations = data.collaborations || [];
+      }
+    } catch (e) {
+      console.warn("[team] Failed to fetch collaborations:", e);
+    }
+  }
+
+  function formatRelativeTime(dateStr: string): string {
+    if (!dateStr) return "—";
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "刚刚";
+    if (diffMin < 60) return `${diffMin}分钟前`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}小时前`;
+    const diffDay = Math.floor(diffHr / 24);
+    return `${diffDay}天前`;
+  }
+
+  function collaborationStatusColor(status: string): string {
+    switch (status) {
+      case "completed": return "#10b981";
+      case "running": return "#3b82f6";
+      case "failed": return "#ef4444";
+      default: return "#64748b";
+    }
+  }
+
   // ─── Domain 定义 ─────────────────────────────────────────────────────────
   const DOMAIN_META: Record<string, { name: string; emoji: string; color: string; desc: string }> = {
     infrastructure: { name: "基础设施域", emoji: "🔧", color: "#00E5FF", desc: "SynapseOS 等 AI-Native 管理工具" },
@@ -273,7 +320,8 @@
     startStatusWs();
     loadRegistry();
     refresh();
-    refreshTimer = setInterval(() => { refresh(); loadRegistry(); }, 30000);
+    fetchCollaborations();
+    refreshTimer = setInterval(() => { refresh(); loadRegistry(); fetchCollaborations(); }, 30000);
   });
 
   onDestroy(() => {
@@ -399,6 +447,65 @@
             ▶
           </span>
         </button>
+
+        <!-- Collaboration Timeline (show once at top of first domain) -->
+        {#if collaborations.length > 0}
+          <div class="glass-card p-5 mb-4">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="font-rajdhani text-lg font-bold text-txt-primary flex items-center gap-2">
+                <span>🔄</span> 协作动态
+              </h3>
+              {#if collaborations.length > 10}
+                <button
+                  class="text-xs text-cyber-cyan hover:underline"
+                  on:click={() => showAllCollaborations = !showAllCollaborations}
+                >
+                  {showAllCollaborations ? '收起' : `查看全部 (${collaborations.length})`}
+                </button>
+              {/if}
+            </div>
+
+            <div class="relative">
+              <!-- Timeline line -->
+              <div class="absolute left-[6px] top-2 bottom-2 w-0.5 bg-white/10"></div>
+
+              <div class="space-y-3">
+                {#each (showAllCollaborations ? collaborations : collaborations.slice(0, 10)) as collab, idx}
+                  <div class="flex gap-3 relative">
+                    <!-- Timeline dot -->
+                    <div
+                      class="w-3 h-3 rounded-full flex-shrink-0 mt-1.5 z-10"
+                      style="background-color: {collaborationStatusColor(collab.status)}"
+                    ></div>
+
+                    <!-- Card -->
+                    <div class="flex-1 glass-card p-3 rounded-lg border border-white/5">
+                      <div class="flex items-center justify-between mb-1">
+                        <span class="text-xs font-mono">
+                          <span class="text-cyber-cyan">{collab.initiator}</span>
+                          <span class="text-txt-secondary mx-1">→</span>
+                          <span class="text-cyber-violet">{collab.executor}</span>
+                        </span>
+                        <span
+                          class="px-1.5 py-0.5 rounded text-xs font-mono"
+                          style="background-color: {collaborationStatusColor(collab.status)}20; color: {collaborationStatusColor(collab.status)}; border: 1px solid {collaborationStatusColor(collab.status)}40"
+                        >
+                          {collab.status}
+                        </span>
+                      </div>
+                      <p class="text-sm text-txt-primary line-clamp-2">
+                        {collab.task_summary?.slice(0, 50) || '—'}{collab.task_summary?.length > 50 ? '...' : ''}
+                      </p>
+                      <p class="text-xs text-txt-secondary/60 mt-1 font-mono">
+                        {formatRelativeTime(collab.created_at)}
+                      </p>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          </div>
+        {/if}
 
         <!-- Role Cards Grid -->
         {#if !collapsed_d}

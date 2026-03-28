@@ -63,7 +63,7 @@
 
   // 频道相关状态
   let channels: Channel[] = [];
-  let expandedChannel: string = "";  // 当前展开的频道 ID
+  let expandedChannel: string = "__ALL__";  // 默认展开所有频道
   let channelStates: Record<string, ChannelState> = {};
   let joinedChannels: Set<string> = new Set();
 
@@ -453,10 +453,22 @@
   <!-- 频道侧栏 (200px) -->
   <div style="width:200px;background:rgba(11,16,30,0.98);border-right:1px solid rgba(0,229,255,0.1);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto;">
     <!-- 频道列表标题 -->
-    <div style="padding:16px 12px 8px;font-size:12px;font-weight:600;color:#00e5ff;text-transform:uppercase;letter-spacing:1px;">
-      💬 频道
+    <div style="padding:16px 12px 8px;display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:12px;font-weight:600;color:#00e5ff;text-transform:uppercase;letter-spacing:1px;">💬 频道</span>
+      <button
+        type="button"
+        on:click|stopPropagation={() => {
+          if (currentChannelId && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'join_channel', channelId: currentChannelId }));
+          }
+        }}
+        style="padding:2px 8px;font-size:11px;color:#64748b;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:4px;cursor:pointer;"
+        title="同步当前频道"
+      >
+        ⟳ 同步
+      </button>
     </div>
-    
+
     <!-- 频道列表 -->
     <div style="padding:0 8px;">
       <!-- 果爸单独入口 -->
@@ -487,7 +499,7 @@
       {#each channels.filter(c => c.type === 'domain') as channel}
         {@const isSelected = currentChannelId === channel.id}
         {@const channelState = getChannelState(channel.id)}
-        {@const isExpanded = expandedChannel === channel.id}
+        {@const isExpanded = expandedChannel === "__ALL__" || expandedChannel === channel.id}
         {@const allMembers = channel.members || channelState.members || []}
         {@const onlineCount = allMembers.filter(m => m.status === 'online').length}
 
@@ -706,7 +718,7 @@
           }
         }}
         disabled={!currentChannelId}
-        style="width:100%;min-height:80px;background:rgba(30,41,59,0.6);border:1px solid rgba(0,229,255,0.2);border-radius:12px;padding:12px 14px;color:#e2e8f0;font-size:14px;resize:none;outline:none;line-height:1.6;font-family:inherit;transition:all 0.2s;{!currentChannelId ? 'opacity:0.5;' : ''}"
+        style="width:100%;min-height:120px;max-height:300px;background:rgba(30,41,59,0.6);border:1px solid rgba(0,229,255,0.2);border-radius:12px;padding:12px 14px;color:#e2e8f0;font-size:14px;resize:vertical;outline:none;line-height:1.6;font-family:inherit;transition:all 0.2s;{!currentChannelId ? 'opacity:0.5;' : ''}"
       ></textarea>
       <button
         on:click={sendMessage}

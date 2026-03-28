@@ -1,0 +1,19 @@
+{
+  "name": "SynapseOS",
+  "short_name": "SynapseOS",
+  "description": "SynapseOS 智能协作平台",
+  "start_url": "/mobile",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#00E5FF",
+  "background_color": "#0A0E1A",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

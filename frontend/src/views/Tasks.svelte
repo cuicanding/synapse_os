@@ -1,6 +1,20 @@
 <script lang="ts">
   import { tasks, missions, loading } from "../lib/stores";
   import MarkdownDetail from "../components/MarkdownDetail.svelte";
+  import PhaseCard from "../components/PhaseCard.svelte";
+  import DiscussionPanel from "../components/DiscussionPanel.svelte";
+  import {
+    fetchTaskPhases,
+    fetchFileContent,
+    approveTask,
+    rejectTask,
+    acceptTask,
+    requestTaskRevision,
+    addArtifact,
+    archiveTask,
+    completeTask,
+    type PhaseInfo,
+  } from "../lib/api";
 
   // Filters
   let filterMission = "";
@@ -12,9 +26,209 @@
   // Expanded task detail
   let expandedTaskId: string | null = null;
 
-  function toggleExpand(id: string) {
-    expandedTaskId = expandedTaskId === id ? null : id;
+  // Viewed tasks tracking (localStorage)
+  let viewedTasks: Set<string> = new Set();
+  function loadViewedTasks() {
+    try {
+      const stored = localStorage.getItem("viewedTasks");
+      if (stored) {
+        viewedTasks = new Set(JSON.parse(stored));
+      }
+    } catch (e) {
+      console.warn("Failed to load viewedTasks:", e);
+    }
   }
+  function saveViewedTasks() {
+    try {
+      localStorage.setItem("viewedTasks", JSON.stringify([...viewedTasks]));
+    } catch (e) {
+      console.warn("Failed to save viewedTasks:", e);
+    }
+  }
+  function markTaskViewed(taskId: string) {
+    if (!viewedTasks.has(taskId)) {
+      viewedTasks.add(taskId);
+      saveViewedTasks();
+    }
+  }
+
+  // Phase info for expanded task
+  let phaseInfo: PhaseInfo[] = [];
+  let phaseLoading = false;
+
+  // Artifact preview
+  let previewArtifact: { name: string; path: string } | null = null;
+  let previewContent = "";
+  let previewError = "";
+  let previewLoading = false;
+
+  async function openArtifactPreview(artifact: { name: string; path: string }) {
+    if (!artifact.path.endsWith(".md")) return;
+    previewArtifact = artifact;
+    previewContent = "";
+    previewError = "";
+    previewLoading = true;
+    try {
+      const res = await fetchFileContent(artifact.path);
+      if (res.error) {
+        previewError = res.error;
+      } else {
+        previewContent = res.content;
+      }
+    } catch (e: any) {
+      previewError = e.message || "Failed to load";
+    } finally {
+      previewLoading = false;
+    }
+  }
+
+  function closePreview() {
+    previewArtifact = null;
+    previewContent = "";
+    previewError = "";
+  }
+
+  // Artifact form
+  let showArtifactForm = false;
+  let artifactName = "";
+  let artifactPath = "";
+  let artifactType = "DS";
+
+  function toggleArtifactForm() {
+    showArtifactForm = !showArtifactForm;
+    if (!showArtifactForm) {
+      artifactName = "";
+      artifactPath = "";
+      artifactType = "DS";
+    }
+  }
+
+  async function submitArtifact(taskId: string) {
+    if (!artifactName.trim() || !artifactPath.trim()) return;
+    try {
+      await addArtifact(taskId, {
+        name: artifactName.trim(),
+        path: artifactPath.trim(),
+        type: artifactType,
+      });
+      toggleArtifactForm();
+    } catch (e) {
+      console.error("Failed to add artifact:", e);
+    }
+  }
+
+  // Parse artifacts from task content
+  interface Artifact {
+    name: string;
+    type: string;
+    path: string;
+    time?: string;
+  }
+
+  function parseArtifacts(content: string): Artifact[] {
+    if (!content) return [];
+    const artifacts: Artifact[] = [];
+
+    // Pattern 1: - **name** (TYPE): `path.md` — time
+    const p1 = /-\s*\*\*([^*]+)\*\*\s*\((\w+)\):\s*`([^`]+\.md)`\s*(?:—|-)\s*([^\n]+)/g;
+    let m;
+    while ((m = p1.exec(content)) !== null) {
+      artifacts.push({ name: m[1].trim(), type: m[2], path: m[3], time: m[4].trim() });
+    }
+
+    // Pattern 2: - **name**: `path.md`
+    const p2 = /-\s*\*\*([^*]+)\*\*:\s*`([^`]+\.md)`/g;
+    while ((m = p2.exec(content)) !== null) {
+      if (!artifacts.some(a => a.path === m[2])) {
+        artifacts.push({ name: m[1].trim(), type: "DOC", path: m[2] });
+      }
+    }
+
+    // Pattern 3: Table row: | 产出 | `path.md` | 说明 | or list .md paths
+    const p3 = /\|\s*产出\s*\|\s*`([^`]+\.md)`/g;
+    while ((m = p3.exec(content)) !== null) {
+      if (!artifacts.some(a => a.path === m[1])) {
+        artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] });
+      }
+    }
+
+    // Pattern 4: List item with .md path (catch-all)
+    const p4 = /[-*]\s*[^\n`]*`([^`]+\.md)`/g;
+    while ((m = p4.exec(content)) !== null) {
+      if (!artifacts.some(a => a.path === m[1])) {
+        artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] });
+      }
+    }
+
+    return artifacts;
+  }
+
+  async function toggleExpand(id: string) {
+    if (expandedTaskId === id) {
+      expandedTaskId = null;
+      phaseInfo = [];
+    } else {
+      expandedTaskId = id;
+      markTaskViewed(id);
+      // Fetch phase info
+      phaseLoading = true;
+      try {
+        phaseInfo = await fetchTaskPhases(id);
+      } catch (e) {
+        console.error("Failed to fetch phases:", e);
+        phaseInfo = [];
+      } finally {
+        phaseLoading = false;
+      }
+    }
+  }
+
+  // Action handlers
+  async function handleApprove(taskId: string) {
+    try {
+      await approveTask(taskId);
+    } catch (e) {
+      console.error("Approve failed:", e);
+    }
+  }
+
+  async function handleReject(taskId: string) {
+    const reason = prompt("驳回原因：");
+    if (reason !== null) {
+      try {
+        await rejectTask(taskId);
+      } catch (e) {
+        console.error("Reject failed:", e);
+      }
+    }
+  }
+
+  async function handleAccept(taskId: string) {
+    try {
+      await acceptTask(taskId);
+    } catch (e) {
+      console.error("Accept failed:", e);
+    }
+  }
+
+  async function handleRevision(taskId: string) {
+    try {
+      await requestTaskRevision(taskId);
+    } catch (e) {
+      console.error("Request revision failed:", e);
+    }
+  }
+
+  async function handleComplete(taskId: string) {
+    try {
+      await completeTask(taskId);
+    } catch (e) {
+      console.error("Complete failed:", e);
+    }
+  }
+
+  // Load viewed tasks on mount
+  loadViewedTasks();
 
   // Unique values for filters
   $: uniqueMissions = [...new Set($tasks.map(t => t.mission_id).filter(Boolean))];
@@ -43,17 +257,25 @@
   // Sorting
   const statusOrder: Record<string, number> = {
     "in-progress": 0, assigned: 1, pending: 2, completed: 3, accepted: 4,
+    "pending-approval": 5, "pending-acceptance": 6,
   };
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
   $: sorted = [...filtered].sort((a, b) => {
+    // NEW (unviewed) tasks always on top
+    const aIsNew = !viewedTasks.has(a.id);
+    const bIsNew = !viewedTasks.has(b.id);
+    if (aIsNew && !bIsNew) return -1;
+    if (!aIsNew && bIsNew) return 1;
+
     if (sortBy === "status") {
       return (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
     } else if (sortBy === "priority") {
       return (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
     } else {
-      const aTime = a.updated_at || a.created_at || "";
-      const bTime = b.updated_at || b.created_at || "";
+      // Use created_at instead of updated_at
+      const aTime = a.created_at || a.updated_at || "";
+      const bTime = b.created_at || b.updated_at || "";
       return bTime.localeCompare(aTime);
     }
   });
@@ -211,6 +433,10 @@
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 flex-wrap mb-1">
                   <span class="font-mono text-xs text-cyber-cyan/60">{task.id}</span>
+                  <!-- NEW badge for unviewed tasks -->
+                  {#if !viewedTasks.has(task.id)}
+                    <span class="px-1.5 py-0.5 rounded text-xs bg-cyber-red/20 border border-cyber-red/30 text-cyber-red font-bold animate-pulse">NEW</span>
+                  {/if}
                   <span class="text-xs">{priorityEmoji[task.priority] || "⚪"}</span>
                   <span class="status-badge {statusClass[task.status] || 'status-pending'} text-xs">
                     {statusLabel[task.status] || task.status}
@@ -258,6 +484,158 @@
                   accentColor={task.decision_status === 'pending' ? 'amber' : 'green'}
                 />
               {/if}
+
+              <!-- Artifacts from content -->
+              {#if parseArtifacts(task.content || task.proposal_content || '').length > 0}
+                <div class="mt-3 p-3 rounded-lg bg-bg-mid/40 border border-white/5">
+                  <p class="text-xs font-mono text-txt-secondary mb-2">📎 产出物</p>
+                  <div class="space-y-1">
+                    {#each parseArtifacts(task.content || task.proposal_content || '') as a}
+                      <div class="flex items-center justify-between gap-2 text-xs">
+                        <div class="flex items-center gap-2">
+                          <span class="text-cyber-cyan">{a.name}</span>
+                          {#if a.type}
+                            <span class="px-1 py-0.5 rounded bg-white/5 text-txt-secondary">{a.type}</span>
+                          {/if}
+                        </div>
+                        <div class="flex items-center gap-2">
+                          {#if a.path.endsWith('.md')}
+                            <button
+                              class="px-2 py-0.5 rounded bg-cyber-cyan/10 border border-cyber-cyan/20 text-cyber-cyan hover:bg-cyber-cyan/20 transition-colors"
+                              on:click|stopPropagation={() => openArtifactPreview(a)}
+                            >
+                              👁 预览
+                            </button>
+                          {/if}
+                          <span class="text-txt-secondary/60 font-mono truncate max-w-[200px]" title={a.path}>{a.path}</span>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Phase Cards -->
+              {#if phaseLoading}
+                <div class="p-4 text-center text-txt-secondary text-xs">加载阶段信息...</div>
+              {:else if phaseInfo.length > 0}
+                <div class="mt-3 space-y-2">
+                  <p class="text-xs font-mono text-txt-secondary mb-2">🚪 阶段门禁</p>
+                  {#each phaseInfo as phase, idx}
+                    <PhaseCard {task} {phase} isCurrentPhase={phase.status !== 'approved' && phase.status !== 'terminated'} />
+                  {/each}
+                </div>
+              {/if}
+
+              <!-- Discussion Panel -->
+              {#if phaseInfo.length > 0}
+                {@const currentPhase = phaseInfo.find(p => p.status === 'discussing' || p.status === 'pending-review')}
+                {#if currentPhase}
+                  <div class="mt-3">
+                    <DiscussionPanel
+                      taskId={task.id}
+                      phaseId={currentPhase.id}
+                      phaseLabel={currentPhase.label}
+                      phaseStatus={currentPhase.status}
+                      discussions={currentPhase.discussions || []}
+                    />
+                  </div>
+                {/if}
+              {/if}
+
+              <!-- Action Buttons -->
+              <div class="mt-4 pt-3 border-t border-white/5">
+                <div class="flex flex-wrap gap-2">
+                  {#if task.status === 'pending-approval'}
+                    <button
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
+                      on:click|stopPropagation={() => handleApprove(task.id)}
+                    >
+                      ✅ 审批通过
+                    </button>
+                    <button
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-red/15 border border-cyber-red/30 text-cyber-red hover:bg-cyber-red/25 transition-colors"
+                      on:click|stopPropagation={() => handleReject(task.id)}
+                    >
+                      ❌ 驳回
+                    </button>
+                  {:else if task.status === 'pending-acceptance'}
+                    <button
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
+                      on:click|stopPropagation={() => handleAccept(task.id)}
+                    >
+                      ✅ 验收通过
+                    </button>
+                    <button
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-amber/15 border border-cyber-amber/30 text-cyber-amber hover:bg-cyber-amber/25 transition-colors"
+                      on:click|stopPropagation={() => handleRevision(task.id)}
+                    >
+                      🔄 退回修改
+                    </button>
+                  {:else if task.status === 'in-progress'}
+                    <button
+                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-cyan/15 border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/25 transition-colors"
+                      on:click|stopPropagation={() => handleComplete(task.id)}
+                    >
+                      📤 标记完成
+                    </button>
+                  {/if}
+
+                  <!-- Add Artifact Button -->
+                  <button
+                    class="px-3 py-1.5 rounded text-xs font-mono bg-white/5 border border-white/10 text-txt-secondary hover:bg-white/10 transition-colors"
+                    on:click|stopPropagation={toggleArtifactForm}
+                  >
+                    📎 添加产出物
+                  </button>
+                </div>
+
+                <!-- Artifact Form -->
+                {#if showArtifactForm}
+                  <div class="mt-3 p-3 rounded-lg bg-bg-mid/40 border border-white/10 space-y-2">
+                    <p class="text-xs font-mono text-txt-secondary">添加产出物</p>
+                    <div class="grid grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        placeholder="名称"
+                        bind:value={artifactName}
+                        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs text-txt-primary placeholder-txt-secondary/40"
+                      />
+                      <input
+                        type="text"
+                        placeholder="路径"
+                        bind:value={artifactPath}
+                        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs text-txt-primary placeholder-txt-secondary/40"
+                      />
+                      <select
+                        bind:value={artifactType}
+                        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs text-txt-primary"
+                      >
+                        <option value="DS">DS - 设计方案</option>
+                        <option value="DOC">DOC - 文档</option>
+                        <option value="DEMO">DEMO - 演示</option>
+                        <option value="OTHER">OTHER - 其他</option>
+                      </select>
+                    </div>
+                    <div class="flex justify-end gap-2">
+                      <button
+                        class="px-2 py-1 rounded text-xs bg-white/5 border border-white/10 text-txt-secondary hover:bg-white/10"
+                        on:click={toggleArtifactForm}
+                      >
+                        取消
+                      </button>
+                      <button
+                        class="px-2 py-1 rounded text-xs bg-cyber-cyan/15 border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/25"
+                        on:click|stopPropagation={() => submitArtifact(task.id)}
+                        disabled={!artifactName.trim() || !artifactPath.trim()}
+                      >
+                        提交
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
               <div class="flex items-center gap-4 text-xs font-mono text-txt-secondary">
                 {#if task.creator}
                   <span>创建者: <span class="text-cyber-violet">{task.creator}</span></span>
@@ -273,3 +651,29 @@
     </div>
   {/if}
 </div>
+
+<!-- Preview Modal -->
+{#if previewArtifact}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" on:click|stopPropagation={closePreview}>
+    <div class="glass-card w-full max-w-3xl max-h-[80vh] overflow-hidden m-4" on:click|stopPropagation>
+      <div class="flex items-center justify-between p-4 border-b border-white/5">
+        <h3 class="font-rajdhani text-lg font-semibold">📄 {previewArtifact.name}</h3>
+        <button
+          class="w-8 h-8 rounded flex items-center justify-center bg-white/5 hover:bg-white/10 text-txt-secondary"
+          on:click={closePreview}
+        >
+          ✕
+        </button>
+      </div>
+      <div class="p-4 overflow-y-auto max-h-[60vh]">
+        {#if previewLoading}
+          <div class="text-center py-8 text-txt-secondary">加载中...</div>
+        {:else if previewError}
+          <div class="text-center py-8 text-cyber-red">{previewError}</div>
+        {:else}
+          <pre class="text-xs font-mono text-txt-primary whitespace-pre-wrap break-words">{previewContent}</pre>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

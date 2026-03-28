@@ -228,6 +228,99 @@ async def api_tasks():
     data = get_data()
     return data.get("tasks", [])
 
+@app.get("/api/collaboration")
+async def api_collaboration():
+    """Return recent spawn collaboration records from runs.json."""
+    runs_path = os.path.expanduser("~/.openclaw-can/subagents/runs.json")
+    if not os.path.exists(runs_path):
+        return {"collaborations": [], "total": 0}
+    try:
+        with open(runs_path, "r") as f:
+            runs_data = json.load(f)
+        runs = runs_data.get("runs", [])
+        if isinstance(runs, dict):
+            runs = list(runs.values())
+    except Exception:
+        return {"collaborations": [], "total": 0}
+
+    # Agent name mapping
+    name_map = {
+        "main": "主控", "reed": "里德", "susan": "苏珊",
+        "zhouhuajian": "周华健", "zhouxingchi": "周星驰",
+        "renxianqi": "任贤齐", "aniu": "阿牛",
+    }
+
+    def extract_agent(session_key: str) -> str:
+        parts = session_key.split(":")
+        return parts[1] if len(parts) >= 2 else "unknown"
+
+    collaborations = []
+    for run in runs:
+        run_id = run.get("runId", "")
+        controller_key = run.get("controllerSessionKey", "")
+        child_key = run.get("childSessionKey", "")
+        task = run.get("task", "") or ""
+        label = run.get("label", "") or ""
+        created_at = run.get("createdAt", "")
+        ended_at = run.get("endedAt", "")
+        outcome = run.get("outcome", {}) or {}
+
+        from_agent = extract_agent(controller_key)
+        to_agent = extract_agent(child_key)
+        from_name = name_map.get(from_agent, from_agent)
+        to_name = name_map.get(to_agent, to_agent)
+
+        # Status
+        if ended_at and outcome.get("status") == "ok":
+            status = "completed"
+        elif ended_at:
+            status = "failed"
+        else:
+            status = "running"
+
+        # Task summary (first 80 chars, strip markdown headers)
+        summary = task.strip()
+        lines = summary.split("\n")
+        content_lines = [l for l in lines if not l.startswith("#")]
+        summary = "\n".join(content_lines).strip()[:80]
+
+        # Relative time
+        if created_at:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                diff = now - dt
+                if diff.total_seconds() < 60:
+                    relative = "刚刚"
+                elif diff.total_seconds() < 3600:
+                    relative = f"{int(diff.total_seconds() / 60)}分钟前"
+                elif diff.total_seconds() < 86400:
+                    relative = f"{int(diff.total_seconds() / 3600)}小时前"
+                else:
+                    relative = f"{int(diff.total_seconds() / 86400)}天前"
+            except Exception:
+                relative = ""
+        else:
+            relative = ""
+
+        collaborations.append({
+            "id": run_id,
+            "initiator": from_name,
+            "executor": to_name,
+            "task_summary": summary,
+            "label": label,
+            "status": status,
+            "created_at": created_at,
+            "ended_at": ended_at,
+            "relative_time": relative,
+        })
+
+    # Sort by created_at desc, limit 50
+    collaborations.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    collaborations = collaborations[:50]
+    return {"collaborations": collaborations, "total": len(collaborations)}
+
 
 @app.get("/api/blockers")
 async def api_blockers():

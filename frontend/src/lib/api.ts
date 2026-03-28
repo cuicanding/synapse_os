@@ -253,3 +253,117 @@ export async function requestTaskRevision(taskId: string): Promise<TaskActionRes
   });
   return r.json();
 }
+
+// ─── Phase APIs ───────────────────────────────────────────────────────────
+export interface PhaseInfo {
+  id: string;
+  label: string;
+  status: string;
+  assignee?: string;
+  comment?: string;
+  artifacts?: { name: string; path: string }[];
+  discussions?: { time: string; sender: string; message: string }[];
+}
+
+export async function fetchTaskPhases(taskId: string): Promise<PhaseInfo[]> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phases`);
+  return r.json();
+}
+
+export async function phaseStart(taskId: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return r.json();
+}
+
+export async function phaseSubmit(taskId: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return r.json();
+}
+
+export async function phaseApprove(taskId: string, comment?: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment }),
+  });
+  return r.json();
+}
+
+export async function phaseReject(taskId: string, reason: string, escalate: boolean): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason, escalate }),
+  });
+  return r.json();
+}
+
+export async function phaseResubmit(taskId: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/resubmit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return r.json();
+}
+
+export async function phaseTerminate(taskId: string, reason: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/terminate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  return r.json();
+}
+
+export async function phaseDiscuss(taskId: string, action: string, message: string, sender: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/phase/discuss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, message, sender }),
+  });
+  return r.json();
+}
+
+// ─── File Content API ─────────────────────────────────────────────────────
+export async function fetchFileContent(path: string): Promise<{ content: string; error?: string }> {
+  const r = await apiFetch(`${BASE}/api/file-content?path=${encodeURIComponent(path)}`);
+  return r.json();
+}
+
+// ─── Artifact API ──────────────────────────────────────────────────────────
+export async function addArtifact(taskId: string, artifact: { name: string; path: string; type: string }): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/artifacts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(artifact),
+  });
+  return r.json();
+}
+
+// ─── Additional Task Actions ───────────────────────────────────────────────
+export async function archiveTask(taskId: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/archive`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return r.json();
+}
+
+export async function completeTask(taskId: string): Promise<TaskActionResponse> {
+  const r = await apiFetch(`${BASE}/api/tasks/${taskId}/complete`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return r.json();
+}
