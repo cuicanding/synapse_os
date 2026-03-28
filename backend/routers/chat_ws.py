@@ -169,19 +169,26 @@ def _persist_message(channel_id: str, message: dict):
 
 
 def get_channel_history(channel_id: str, limit: int = 50) -> list[dict]:
-    """获取频道历史消息。优先从磁盘文件加载。"""
-    messages = channel_messages.get(channel_id, [])
+    """获取频道历史消息。合并磁盘历史和内存新消息，按时间排序后返回最新 limit 条。"""
+    # 从磁盘加载持久化历史
+    disk_messages = _load_history_from_disk(channel_id, limit=2000)
 
-    if messages:
-        return messages[-limit:]
+    # 合并内存中可能尚未落盘的新消息
+    mem_messages = channel_messages.get(channel_id, [])
+    if mem_messages and disk_messages:
+        # 提取磁盘消息已有的 id 集合，避免重复
+        disk_ids = {m.get("id") for m in disk_messages}
+        new_from_mem = [m for m in mem_messages if m.get("id") not in disk_ids]
+        merged = disk_messages + new_from_mem
+    elif mem_messages:
+        merged = mem_messages
+    else:
+        merged = disk_messages
 
-    # 从磁盘文件加载
-    disk_messages = _load_history_from_disk(channel_id, limit=limit)
-    if disk_messages:
-        channel_messages[channel_id] = disk_messages[-2000:]
-        return disk_messages[-limit:]
+    if merged:
+        channel_messages[channel_id] = merged[-2000:]
 
-    return []
+    return merged[-limit:]
 
 
 def extract_text(content):
