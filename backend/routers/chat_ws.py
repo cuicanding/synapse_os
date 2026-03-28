@@ -486,7 +486,7 @@ async def websocket_chat(ws: WebSocket):
             elif msg_type == "join_channel":
                 # 切换频道
                 new_channel = msg.get("channelId", "")
-                if new_channel and new_channel != current_channel:
+                if new_channel:
                     current_channel = new_channel
                     history = get_channel_history(new_channel, limit=50)
                     members = get_channel_members(new_channel)
