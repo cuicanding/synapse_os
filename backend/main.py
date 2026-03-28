@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, os.path.dirname(__file__))
 
 from parser import load_all
+from asset_storage import query_assets, get_all_assets, get_domains, get_missions, get_assets_grouped
 from watcher import DataWatcher
 from status_storage import (
     make_status_report, update_snapshot, get_panel, append_history,
@@ -1133,6 +1134,37 @@ def _get_current_task_status(task_id: str) -> str:
                 return ""
 
     return ""
+
+
+# ─── Assets ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/assets")
+async def api_assets(
+    domain: str = None,
+    mission: str = None,
+    asset_type: str = None,
+    q: str = None,
+    include_archived: bool = False,
+):
+    """Query assets with optional filters."""
+    assets = query_assets(
+        domain=domain or "",
+        mission=mission or "",
+        asset_type=asset_type or "",
+        q=q or "",
+        include_archived=include_archived,
+    )
+    return {"assets": assets, "total": len(assets)}
+
+
+@app.get("/api/assets/domains")
+async def api_asset_domains():
+    return get_domains()
+
+
+@app.get("/api/assets/missions")
+async def api_asset_missions():
+    return get_missions()
 
 
 # ─── WebSocket ───────────────────────────────────────────────────────────────
