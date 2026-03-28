@@ -29,3 +29,7 @@
 14:57:42 [vite] hmr update /src/App.svelte, /src/app.css
 14:57:49 [vite] hmr update /src/App.svelte, /src/app.css
 14:57:58 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:11:46 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:11:58 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:12:59 [vite] hmr update /src/views/Team.svelte, /src/app.css
+15:14:11 [vite] hmr update /src/views/WorkbenchPanel.svelte, /src/app.css, /src/views/WorkbenchPanel.svelte?svelte&type=style&lang.css

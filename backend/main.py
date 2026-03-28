@@ -1146,15 +1146,14 @@ async def api_assets(
     q: str = None,
     include_archived: bool = False,
 ):
-    """Query assets with optional filters."""
-    assets = query_assets(
+    """Query assets with optional filters, return grouped format."""
+    return get_assets_grouped(
         domain=domain or "",
         mission=mission or "",
         asset_type=asset_type or "",
         q=q or "",
         include_archived=include_archived,
     )
-    return {"assets": assets, "total": len(assets)}
 
 
 @app.get("/api/assets/domains")

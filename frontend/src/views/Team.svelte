@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { statusPanel, statusWsConnected, startStatusWs, stopStatusWs } from "../lib/status-ws";
-  import { fetchStatusPanel, type AgentStatus, type StatusPanel } from "../lib/api";
+  import { fetchStatusPanel, fetchStatusHistory, type AgentStatus, type StatusPanel, type StatusReport } from "../lib/api";
   import { showDifficultyModal, showHistorySidebar, statusDetailAgent } from "../lib/stores";
   import DifficultyModal from "./DifficultyModal.svelte";
   import StatusHistory from "./StatusHistory.svelte";
@@ -10,6 +10,12 @@
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let registry: Record<string, any> = {};
   let collapsed: Record<string, boolean> = {};
+
+  // Today modal state
+  let showTodayModal = false;
+  let todayModalAgent: RoleSlotCard | null = null;
+  let todayRecords: StatusReport[] = [];
+  let todayLoading = false;
 
   // Collaboration data
   interface Collaboration {
@@ -319,6 +325,64 @@
     showDifficultyModal.set(true);
   }
 
+  // Get latest activity text from card status
+  function getLatestActivity(card: RoleSlotCard): string {
+    if (!card.status) return "暂无动态";
+    if (card.status.progress_detail) return card.status.progress_detail;
+    if (card.status.needs_help) return `需求: ${card.status.needs_help}`;
+    if (card.status.difficulty) return `困难: ${card.status.difficulty}`;
+    if (card.status.needs_decision) return `待决策: ${card.status.needs_decision}`;
+    return "暂无动态";
+  }
+
+  // Open today modal and fetch records
+  async function openTodayModal(card: RoleSlotCard) {
+    if (!card.agentId) return;
+    todayModalAgent = card;
+    showTodayModal = true;
+    todayLoading = true;
+    todayRecords = [];
+
+    try {
+      // Get today's start time
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const fromTime = today.toISOString();
+
+      const response = await fetchStatusHistory({
+        agent_id: card.agentId,
+        page: 1,
+        limit: 50
+      });
+
+      // Filter records from today
+      todayRecords = (response.records || []).filter(r => r.created_at >= fromTime);
+    } catch (e) {
+      console.error("[team] Failed to fetch today records:", e);
+    } finally {
+      todayLoading = false;
+    }
+  }
+
+  function closeTodayModal() {
+    showTodayModal = false;
+    todayModalAgent = null;
+    todayRecords = [];
+  }
+
+  function formatTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function getRecordTypeIcon(type: string): string {
+    switch (type) {
+      case "difficulty": return "🚨";
+      case "decision": return "🔔";
+      default: return "📋";
+    }
+  }
+
   onMount(() => {
     startStatusWs();
     loadRegistry();
@@ -569,12 +633,21 @@
 
                 <!-- 任务信息（仅已分配人员显示）-->
                 {#if !isUnassigned}
+                  {@const activity = getLatestActivity(card)}
                   <div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
                     <!-- 当前任务 -->
                     <div>
                       <p class="text-xs text-txt-secondary font-mono">任务</p>
                       <p class="text-xs text-txt-primary font-chinese truncate" title={card.currentTask}>
                         {card.currentTask || "—"}
+                      </p>
+                    </div>
+
+                    <!-- 最新动态 -->
+                    <div class="bg-white/5 rounded px-2 py-1.5">
+                      <p class="text-xs text-txt-secondary/70 font-mono mb-0.5">最新动态</p>
+                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-3" title={activity}>
+                        {activity}
                       </p>
                     </div>
 
@@ -627,6 +700,12 @@
                       📋 历史
                     </button>
                     <button
+                      onclick={() => openTodayModal(card)}
+                      class="flex-1 text-xs py-1 rounded bg-white/5 hover:bg-cyber-cyan/10 text-txt-secondary hover:text-cyber-cyan transition-colors"
+                    >
+                      📝 动态
+                    </button>
+                    <button
                       onclick={() => openDifficulty(card.agentId || '')}
                       class="flex-1 text-xs py-1 rounded bg-white/5 hover:bg-cyber-red/10 text-txt-secondary hover:text-cyber-red transition-colors"
                     >
@@ -642,3 +721,73 @@
     {/each}
   {/if}
 </div>
+
+<!-- Today Modal -->
+{#if showTodayModal && todayModalAgent}
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4" on:click={closeTodayModal}>
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+
+    <div class="relative glass-card border border-cyber-cyan/20 w-full max-w-lg max-h-[80vh] flex flex-col" on:click|stopPropagation>
+      <!-- Header -->
+      <div class="flex items-center justify-between p-5 border-b border-white/10">
+        <h2 class="font-rajdhani text-lg font-bold flex items-center gap-2">
+          <span class="text-cyber-cyan">📝</span> 今日动态
+          <span class="text-txt-secondary text-sm">— {todayModalAgent.agentNames.join("、")}</span>
+        </h2>
+        <button on:click={closeTodayModal} class="text-txt-secondary hover:text-txt-primary text-xl">✕</button>
+      </div>
+
+      <!-- Content -->
+      <div class="p-5 overflow-y-auto flex-1">
+        {#if todayLoading}
+          <div class="text-center py-8">
+            <div class="animate-spin w-6 h-6 border-2 border-cyber-cyan/30 border-t-cyber-cyan rounded-full mx-auto mb-3"></div>
+            <p class="text-sm text-txt-secondary">加载中...</p>
+          </div>
+        {:else if todayRecords.length === 0}
+          <div class="text-center py-8">
+            <p class="text-3xl mb-3">📭</p>
+            <p class="text-sm text-txt-secondary">今日暂无上报记录</p>
+          </div>
+        {:else}
+          <div class="space-y-3">
+            {#each todayRecords as record}
+              <div class="glass-card p-3 rounded-lg border border-white/5">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs font-mono text-cyber-cyan">{formatTime(record.created_at)}</span>
+                  <span class="text-xs">{getRecordTypeIcon(record.type)}</span>
+                </div>
+                {#if record.progress_detail}
+                  <p class="text-sm text-txt-primary font-chinese mb-2">{record.progress_detail}</p>
+                {/if}
+                <div class="space-y-1">
+                  {#if record.difficulty}
+                    <p class="text-xs text-cyber-red/80 font-chinese">🚨 {record.difficulty}</p>
+                  {/if}
+                  {#if record.needs_help}
+                    <p class="text-xs text-cyber-amber/80 font-chinese">📣 需求: {record.needs_help}</p>
+                  {/if}
+                  {#if record.needs_decision}
+                    <p class="text-xs text-cyber-violet/80 font-chinese">🔔 待决策: {record.needs_decision}</p>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <!-- Footer -->
+      <div class="p-4 border-t border-white/10 flex justify-end">
+        <button
+          on:click={closeTodayModal}
+          class="px-4 py-2 text-sm rounded bg-white/10 hover:bg-white/20 text-txt-primary transition-colors"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

@@ -591,6 +591,34 @@
 
   <!-- 主内容区域 (flex-1) -->
   <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+    <!-- 聊天顶栏 -->
+    {#if currentChannelId}
+      {@const currentChannel = getCurrentChannel()}
+      <div style="padding:12px 20px;border-bottom:1px solid rgba(0,229,255,0.1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          {#if currentChannel}
+            <span style="font-size:18px;">{currentChannel.icon}</span>
+            <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannel.name}</span>
+          {:else}
+            <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannelId}</span>
+          {/if}
+          <span style="font-size:11px;color:#64748b;">({(currentChannel?.members || currentChannelState.members || []).length} 人)</span>
+        </div>
+        <button
+          type="button"
+          on:click={() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'join_channel', channelId: currentChannelId }));
+            }
+          }}
+          style="padding:4px 12px;font-size:12px;color:#64748b;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:4px;"
+          title="同步当前频道历史消息"
+        >
+          ⟳ 同步历史
+        </button>
+      </div>
+    {/if}
+
     <!-- 消息区域 -->
     <div bind:this={chatScrollEl} style="flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;gap:16px;padding:16px 20px;">
       {#if currentChannelId}
