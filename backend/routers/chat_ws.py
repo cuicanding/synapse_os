@@ -61,9 +61,7 @@ CHANNEL_DISPLAY = {
     "domain-quant": {"name": "金蟾量化", "icon": "🦎"},
 }
 
-# 内存消息历史存储: channelId -> list of messages
-# 每个消息: {id, senderId, senderName, content, timestamp, role}
-channel_messages: dict[str, list[dict]] = {}
+# 频道消息完全走磁盘持久化（JSONL），不使用内存缓存
 
 # 预定义的频道列表（包含 DM 频道）
 def get_all_channels():
@@ -134,9 +132,7 @@ def get_dm_target_agent(channel_id: str) -> str | None:
 
 
 def add_message_to_channel(channel_id: str, sender_id: str, sender_name: str, content: str, role: str = "user"):
-    """添加消息到频道历史（内存 + 磁盘持久化）。"""
-    if channel_id not in channel_messages:
-        channel_messages[channel_id] = []
+    """添加消息到频道历史（纯磁盘持久化，无内存缓存）。"""
     message = {
         "id": uuid.uuid4().hex[:12],
         "senderId": sender_id,
@@ -145,12 +141,6 @@ def add_message_to_channel(channel_id: str, sender_id: str, sender_name: str, co
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "role": role,
     }
-    channel_messages[channel_id].append(message)
-    # 限制内存中的消息数量
-    if len(channel_messages[channel_id]) > 2000:
-        channel_messages[channel_id] = channel_messages[channel_id][-2000:]
-
-    # 持久化到磁盘
     _persist_message(channel_id, message)
     return message
 
@@ -169,26 +159,8 @@ def _persist_message(channel_id: str, message: dict):
 
 
 def get_channel_history(channel_id: str, limit: int = 50) -> list[dict]:
-    """获取频道历史消息。合并磁盘历史和内存新消息，按时间排序后返回最新 limit 条。"""
-    # 从磁盘加载持久化历史
-    disk_messages = _load_history_from_disk(channel_id, limit=2000)
-
-    # 合并内存中可能尚未落盘的新消息
-    mem_messages = channel_messages.get(channel_id, [])
-    if mem_messages and disk_messages:
-        # 提取磁盘消息已有的 id 集合，避免重复
-        disk_ids = {m.get("id") for m in disk_messages}
-        new_from_mem = [m for m in mem_messages if m.get("id") not in disk_ids]
-        merged = disk_messages + new_from_mem
-    elif mem_messages:
-        merged = mem_messages
-    else:
-        merged = disk_messages
-
-    if merged:
-        channel_messages[channel_id] = merged[-2000:]
-
-    return merged[-limit:]
+    """获取频道历史消息（纯磁盘读取）。"""
+    return _load_history_from_disk(channel_id, limit=limit)
 
 
 def extract_text(content):
@@ -524,9 +496,11 @@ async def websocket_chat(ws: WebSocket):
                             "sessionKey": key,
                         }, timeout=10)
                         print(f"[ws:chat] Session create for {agent_id}: {create_resp}")
-                        # 3. 清空内存中的频道消息历史
-                        if channel_id in channel_messages:
-                            channel_messages[channel_id] = []
+                        # 3. 清空频道的历史消息（删除磁盘文件）
+                        safe_id = channel_id.replace("/", "_").replace("\\", "_")
+                        filepath = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.jsonl")
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
                         # 4. 通知前端重置成功
                         await ws.send_json({
                             "type": "session_reset",
