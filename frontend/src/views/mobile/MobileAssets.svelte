@@ -73,18 +73,25 @@
   // ─── Open detail ─────────────────────────────────────────────────────
   async function openAsset(asset: any) {
     detailAsset = asset;
-    previewContent = "";
+    previewContent = asset.content || "";
     previewError = "";
-    if (!asset.path) return;
-    previewLoading = true;
-    try {
-      const res = await fetchFileContent(asset.path);
-      previewContent = res.content || "";
-      if (!previewContent) previewError = (res as any).error || "无法读取文件";
-    } catch (e: any) {
-      previewError = e.message || "加载失败";
-    } finally {
-      previewLoading = false;
+    previewLoading = false;
+
+    // If content not embedded, try fetching by source_path or path
+    if (!previewContent) {
+      const filePath = asset.source_path || asset.path;
+      if (filePath) {
+        previewLoading = true;
+        try {
+          const res = await fetchFileContent(filePath);
+          previewContent = res.content || "";
+          if (!previewContent) previewError = (res as any).error || "无法读取文件";
+        } catch (e: any) {
+          previewError = e.message || "加载失败";
+        } finally {
+          previewLoading = false;
+        }
+      }
     }
   }
 
