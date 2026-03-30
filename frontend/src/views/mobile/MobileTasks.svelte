@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { tasks } from "../../lib/stores";
-  import { fetchFileContent, approveTask, rejectTask, acceptTask, requestTaskRevision } from "../../lib/api";
+  import { fetchFileContent, acceptTask, archiveTask, completeTask, abandonTask } from "../../lib/api";
 
   // ─── Filter ──────────────────────────────────────────────────────────
   type FilterTab = "all" | "pending-approval" | "in-progress" | "completed";
@@ -109,6 +109,24 @@
     }
   }
 
+  interface Artifact { name: string; type: string; path: string; time?: string; }
+  function parseArtifacts(content: string): Artifact[] {
+    if (!content) return [];
+    const artifacts: Artifact[] = [];
+    const p1 = /-\s*\*\*([^*]+)\*\*\s*\((\w+)\):\s*`([^`]+\.md)`\s*(?:—|-)\s*([^\n]+)/g;
+    let m;
+    while ((m = p1.exec(content)) !== null) artifacts.push({ name: m[1].trim(), type: m[2], path: m[3], time: m[4].trim() });
+    const p2 = /-\s*\*\*([^*]+)\*\*:\s*`([^`]+\.md)`/g;
+    while ((m = p2.exec(content)) !== null) { if (!artifacts.some(a => a.path === m[2])) artifacts.push({ name: m[1].trim(), type: "DOC", path: m[2] }); }
+    const p3 = /\|\s*产出\s*\|\s*`([^`]+\.md)`/g;
+    while ((m = p3.exec(content)) !== null) { if (!artifacts.some(a => a.path === m[1])) artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] }); }
+    const p4 = /[-*]\s*[^\n`]*`([^`]+\.md)`/g;
+    while ((m = p4.exec(content)) !== null) { if (!artifacts.some(a => a.path === m[1])) artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] }); }
+    const p5 = /`([^`]+\.md)`/g;
+    while ((m = p5.exec(content)) !== null) { if (!artifacts.some(a => a.path === m[1])) artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] }); }
+    return artifacts;
+  }
+
   // ─── Task actions ─────────────────────────────────────────────────────
   let actionLoading = false;
   let actionMsg = "";
@@ -121,14 +139,19 @@
       const r = await fn();
       if (r.success !== false) {
         actionMsg = `✅ ${label}成功`;
-        // Refresh tasks store manually by re-fetching
-        setTimeout(() => { actionMsg = ""; }, 2000);
-        closeDetail();
+        // Refresh tasks
+        try {
+          const res = await fetch("/api/tasks");
+          if (res.ok) tasks.set(await res.json());
+        } catch (e) { console.error("[mobile] refresh failed:", e); }
+        setTimeout(() => { actionMsg = ""; closeDetail(); }, 800);
       } else {
         actionMsg = `❌ ${r.error || label + "失败"}`;
+        setTimeout(() => { actionMsg = ""; }, 3000);
       }
     } catch (e: any) {
       actionMsg = `❌ ${e.message || label + "失败"}`;
+      setTimeout(() => { actionMsg = ""; }, 3000);
     } finally {
       actionLoading = false;
     }
@@ -214,7 +237,7 @@
           </div>
         {/if}
 
-        <!-- 产出物 -->
+        <!-- 产出物 (from phases) -->
         {#if detailTask.phases}
           {#each Object.values(detailTask.phases) as phase}
             {#if phase && phase.artifacts && phase.artifacts.length > 0}
@@ -232,6 +255,21 @@
           {/each}
         {/if}
 
+        <!-- 产出物 (parsed from content) -->
+        {#if parseArtifacts(detailTask.content || detailTask.proposal_content || '').length > 0}
+          <div class="detail-section">
+            <div class="section-title">📎 产出物</div>
+            {#each parseArtifacts(detailTask.content || detailTask.proposal_content || '') as artifact}
+              <button class="artifact-item" on:click={() => openArtifact(artifact)}>
+                <span class="artifact-icon">📄</span>
+                <span class="artifact-name">{artifact.name || artifact.path.split('/').pop()}</span>
+                <span class="artifact-type">{artifact.type}</span>
+                <span class="artifact-arrow">›</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+
         {#if actionMsg}
           <div class="action-msg">{actionMsg}</div>
         {/if}
@@ -239,23 +277,17 @@
 
       <!-- 底部操作栏 -->
       <div class="detail-actions">
-        {#if (detailTask.status || "").toLowerCase().replace("待审批","pending-approval") === "pending-approval" || (detailTask.status || "") === "待审批"}
+        {#if (detailTask.status || "") !== "archived" && (detailTask.status || "") !== "completed" && (detailTask.status || "") !== "accepted"}
           <button class="action-btn approve" disabled={actionLoading}
-            on:click={() => doAction(() => approveTask(detailTask.id), "审批")}>
-            审批
+            on:click={() => doAction(() => acceptTask(detailTask.id), "提交成功")}>
+            ✅ 提交成功
           </button>
+        {/if}
+
+        {#if (detailTask.status || "") !== "archived" && (detailTask.status || "") !== "completed" && (detailTask.status || "") !== "accepted"}
           <button class="action-btn reject" disabled={actionLoading}
-            on:click={() => doAction(() => rejectTask(detailTask.id), "驳回")}>
-            驳回
-          </button>
-        {:else if (detailTask.status || "").toLowerCase() === "pending-acceptance" || (detailTask.status || "") === "待验收"}
-          <button class="action-btn approve" disabled={actionLoading}
-            on:click={() => doAction(() => acceptTask(detailTask.id), "验收")}>
-            验收
-          </button>
-          <button class="action-btn reject" disabled={actionLoading}
-            on:click={() => doAction(() => requestTaskRevision(detailTask.id), "打回")}>
-            打回
+            on:click={() => doAction(() => abandonTask(detailTask.id), "废弃")}>
+            🚫 废弃
           </button>
         {/if}
       </div>
@@ -555,6 +587,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .artifact-type {
+    font-size: 11px;
+    color: #64748B;
+    flex-shrink: 0;
   }
 
   .artifact-arrow {

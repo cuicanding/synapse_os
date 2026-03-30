@@ -281,7 +281,7 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
         "已驳回": "rejected", "rejected": "rejected",
         "discussing": "discussing", "讨论中": "discussing",
     }
-    status = status_map.get(status.lower().strip(), status.lower().strip())
+    status = status_map.get(status.lower().strip().strip("`"), status.lower().strip().strip("`"))
 
     # Parse all ## / ### sections (used by multiple blocks below)
     sections = {}

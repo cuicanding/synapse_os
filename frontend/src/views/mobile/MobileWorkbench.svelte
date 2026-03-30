@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { writable, derived, get } from "svelte/store";
 
   // ─── Types ───────────────────────────────────────────────────────────
   interface Turn {
@@ -29,19 +30,38 @@
   }
 
   // ─── View state ──────────────────────────────────────────────────────
-  // "list" = 频道/私聊列表，"chat" = 聊天界面
   let view: "list" | "chat" = "list";
-  let listTab: "channels" | "dm" = "channels";
+  let listTab: "channels" | "dm" = "dm";
 
   // ─── WS state ────────────────────────────────────────────────────────
   let ws: WebSocket | null = null;
   let wsStatus: "disconnected" | "connecting" | "connected" = "disconnected";
   let channels: Channel[] = [];
+  const currentChannelStore = writable("");
   let currentChannelId = "";
-  let channelStates: Record<string, ChannelState> = {};
+  currentChannelStore.subscribe(v => { currentChannelId = v; });
   let joinedChannels: Set<string> = new Set();
 
+  // ─── Svelte Store for channel states (guaranteed reactivity) ────────
   const DEFAULT_STATE: ChannelState = { messages: [], isStreaming: false, unreadCount: 0 };
+  const channelStatesStore = writable<Record<string, ChannelState>>({});
+
+  function updateChannelState(channelId: string, updater: (prev: ChannelState) => ChannelState) {
+    channelStatesStore.update(all => {
+      const prev = all[channelId] || DEFAULT_STATE;
+      return { ...all, [channelId]: updater(prev) };
+    });
+  }
+
+  // Derived stores for current channel (now depends on currentChannelStore too)
+  const currentMessages = derived(
+    [channelStatesStore, currentChannelStore],
+    ([$cs, $ch]) => ($cs[$ch] || DEFAULT_STATE).messages
+  );
+  const currentIsStreaming = derived(
+    [channelStatesStore, currentChannelStore],
+    ([$cs, $ch]) => ($cs[$ch] || DEFAULT_STATE).isStreaming
+  );
 
   const AGENT_PROFILES: Record<string, { name: string; emoji: string; color: string; role: string }> = {
     main:        { name: "果爸",   emoji: "👑", color: "#FFB800", role: "董事长" },
@@ -58,7 +78,7 @@
   $: domainChannels = channels.filter(c => c.type === "domain");
 
   function getState(id: string): ChannelState {
-    return channelStates[id] || DEFAULT_STATE;
+    return get(channelStatesStore)[id] || DEFAULT_STATE;
   }
 
   // ─── Chat scroll ─────────────────────────────────────────────────────
@@ -83,6 +103,7 @@
     else { newMsgCount++; }
   }
 
+  // ─── On-screen debug log ─────────────────────────────────────────────
   // ─── WS Connection ───────────────────────────────────────────────────
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
@@ -104,133 +125,177 @@
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
+      const mtype = msg.type;
 
-      if (msg.type === "channel_list") {
+      if (mtype === "channel_list") {
         channels = msg.channels || [];
-        if (channels.length > 0 && !currentChannelId) {
-          const first = channels[0].id;
-          joinChannel(first);
-        }
         return;
       }
 
-      if (msg.type === "channel_joined") {
-        currentChannelId = msg.channelId;
-        joinedChannels.add(msg.channelId);
-        const mapped: Turn[] = (msg.history || []).map((m: any) => ({
-          role: m.role,
-          type: m.role === "user" ? "user" : "turn",
-          content: m.content || "",
-          response: m.role === "assistant" ? m.content : "",
-          senderId: m.senderId,
-          senderName: m.senderName,
-          timestamp: m.timestamp,
+      if (mtype === "channel_joined") {
+        const channelId = msg.channelId;
+        const history = msg.history || [];
+        const mapped: Turn[] = history.map((m: any) => {
+          const isUser = m.role === "user" || m.senderId === "user";
+          return {
+            role: isUser ? "user" : "assistant",
+            type: isUser ? "user" : "turn",
+            content: isUser ? (m.content || "") : "",
+            response: isUser ? "" : (m.content || ""),
+            senderId: m.senderId || m.agent || "",
+            senderName: m.senderName || AGENT_PROFILES[m.senderId]?.name || "",
+            timestamp: m.timestamp,
+          };
+        });
+        currentChannelStore.set(channelId);
+        currentChannelId = channelId;
+        joinedChannels.add(channelId);
+
+        channelStatesStore.update(all => ({
+          ...all,
+          [channelId]: { ...(all[channelId] || DEFAULT_STATE), messages: mapped, unreadCount: 0 },
         }));
-        channelStates = {
-          ...channelStates,
-          [msg.channelId]: { ...(channelStates[msg.channelId] || DEFAULT_STATE), messages: mapped },
-        };
-        setTimeout(() => scrollToBottom(), 100);
+
+        setTimeout(() => scrollToBottom(), 200);
         return;
       }
 
-      if (msg.type === "channel_message") {
-        const existing = channelStates[msg.channelId] || DEFAULT_STATE;
-        channelStates = {
-          ...channelStates,
-          [msg.channelId]: {
-            ...existing,
-            messages: [...existing.messages, {
-              role: msg.senderId === "user" ? "user" : "assistant",
-              type: msg.senderId === "user" ? "user" : "turn",
-              content: msg.content,
-              senderId: msg.senderId,
-              senderName: msg.senderName,
-              timestamp: msg.timestamp,
-            }],
-            unreadCount: msg.channelId === currentChannelId ? existing.unreadCount : existing.unreadCount + 1,
-          },
-        };
+      if (mtype === "channel_message") {
+        const chId = msg.channelId;
+        updateChannelState(chId, prev => ({
+          ...prev,
+          messages: [...prev.messages, {
+            role: msg.senderId === "user" ? "user" : "assistant",
+            type: msg.senderId === "user" ? "user" : "turn",
+            content: msg.content,
+            senderId: msg.senderId,
+            senderName: msg.senderName,
+            timestamp: msg.timestamp,
+          }],
+          unreadCount: chId === currentChannelId ? prev.unreadCount : prev.unreadCount + 1,
+        }));
         if (msg.channelId === currentChannelId) triggerSmartScroll();
         return;
       }
 
-      if (msg.type === "agent_thinking") {
-        const tid = msg.channelId || currentChannelId;
-        const existing = channelStates[tid] || DEFAULT_STATE;
-        const msgs = existing.messages;
-        const last = msgs[msgs.length - 1];
-        if (!last || last.senderId !== msg.agent || last.type !== "turn" || !last.streaming) {
-          channelStates = {
-            ...channelStates,
-            [tid]: {
-              ...existing,
-              isStreaming: true,
-              messages: [...msgs, {
-                role: "assistant", type: "turn", response: "", thinking: "",
-                streaming: true, waitingForFirstDelta: true,
-                senderId: msg.agent,
-                senderName: msg.agentName || AGENT_PROFILES[msg.agent]?.name || msg.agent,
-              }],
-            },
+      if (mtype === "agent_thinking") {
+        const tid = msg.channelId || (msg.agent ? `dm-${msg.agent}` : currentChannelId);
+        updateChannelState(tid, prev => {
+          const msgs = prev.messages;
+          const last = msgs[msgs.length - 1];
+          if (last && last.senderId === msg.agent && last.type === "turn" && last.streaming) {
+            return prev; // already have placeholder
+          }
+          return {
+            ...prev,
+            isStreaming: true,
+            messages: [...msgs, {
+              role: "assistant", type: "turn", response: "", thinking: "",
+              streaming: true, waitingForFirstDelta: true,
+              senderId: msg.agent,
+              senderName: msg.agentName || AGENT_PROFILES[msg.agent]?.name || msg.agent,
+            }],
           };
-          if (tid === currentChannelId) triggerSmartScroll();
-        }
+        });
+        if (tid === currentChannelId) triggerSmartScroll();
         return;
       }
 
-      if (msg.type === "session_reset") {
+      if (mtype === "session_reset") {
         if (msg.success) {
-          channelStates = { ...channelStates, [msg.channelId]: { ...DEFAULT_STATE, messages: [] } };
+          updateChannelState(msg.channelId, () => ({ ...DEFAULT_STATE, messages: [] }));
         }
         return;
       }
 
-      if (["delta", "thinking", "done", "error"].includes(msg.type)) {
-        const tid = msg.channelId || currentChannelId;
-        const existing = channelStates[tid] || DEFAULT_STATE;
-        const msgs = existing.messages;
-        const last = msgs[msgs.length - 1];
+      // Resolve target channel: prefer explicit channelId, then infer from agent, last resort currentChannelId
+      function resolveTid(m: any): string {
+        if (m.channelId) return m.channelId;
+        if (m.agent && AGENT_PROFILES[m.agent]) return `dm-${m.agent}`;
+        return currentChannelId;
+      }
 
-        if (msg.type === "delta") {
+      if (mtype === "delta") {
+        const tid = resolveTid(msg);
+        updateChannelState(tid, prev => {
+          const msgs = prev.messages;
+          const last = msgs[msgs.length - 1];
           let newMsgs: Turn[];
           if (!last || last.type !== "turn") {
-            newMsgs = [...msgs, { role: "assistant", type: "turn", response: msg.content || "", streaming: true, senderId: msg.agent, senderName: AGENT_PROFILES[msg.agent]?.name || msg.agent }];
+            newMsgs = [...msgs, {
+              role: "assistant", type: "turn", response: msg.content || "",
+              streaming: true, senderId: msg.agent,
+              senderName: AGENT_PROFILES[msg.agent]?.name || msg.agent,
+            }];
           } else {
-            newMsgs = msgs.map((m, i) => i === msgs.length - 1 ? { ...m, waitingForFirstDelta: false, response: (m.response || "") + msg.content } : m);
+            newMsgs = msgs.map((m, i) =>
+              i === msgs.length - 1
+                ? { ...m, waitingForFirstDelta: false, response: (m.response || "") + msg.content }
+                : m
+            );
           }
-          channelStates = { ...channelStates, [tid]: { ...existing, messages: newMsgs } };
-          if (tid === currentChannelId) triggerSmartScroll();
-        } else if (msg.type === "thinking") {
+          return { ...prev, messages: newMsgs };
+        });
+        if (tid === currentChannelId) triggerSmartScroll();
+        return;
+      }
+
+      if (mtype === "thinking") {
+        const tid = resolveTid(msg);
+        updateChannelState(tid, prev => {
+          const msgs = prev.messages;
+          const last = msgs[msgs.length - 1];
           let newMsgs: Turn[];
           if (!last || last.type !== "turn") {
-            newMsgs = [...msgs, { role: "assistant", type: "turn", response: "", thinking: msg.content, streaming: true, senderId: msg.agent, senderName: AGENT_PROFILES[msg.agent]?.name || msg.agent }];
+            newMsgs = [...msgs, {
+              role: "assistant", type: "turn", response: "", thinking: msg.content,
+              streaming: true, senderId: msg.agent,
+              senderName: AGENT_PROFILES[msg.agent]?.name || msg.agent,
+            }];
           } else {
-            newMsgs = msgs.map((m, i) => i === msgs.length - 1 ? { ...m, waitingForFirstDelta: false, thinking: (m.thinking || "") + msg.content } : m);
+            newMsgs = msgs.map((m, i) =>
+              i === msgs.length - 1
+                ? { ...m, waitingForFirstDelta: false, thinking: (m.thinking || "") + msg.content }
+                : m
+            );
           }
-          channelStates = { ...channelStates, [tid]: { ...existing, messages: newMsgs } };
-          if (tid === currentChannelId) triggerSmartScroll();
-        } else if (msg.type === "done") {
-          const newMsgs = msgs.map((m, i) => i === msgs.length - 1 && m.type === "turn" ? { ...m, streaming: false } : m);
-          channelStates = { ...channelStates, [tid]: { ...existing, messages: newMsgs, isStreaming: false } };
-          if (tid === currentChannelId) triggerSmartScroll();
-        } else if (msg.type === "error") {
-          channelStates = {
-            ...channelStates,
-            [tid]: { ...existing, isStreaming: false, messages: [...msgs, { role: "system", type: "user", content: "❌ " + msg.content }] },
-          };
-        }
+          return { ...prev, messages: newMsgs };
+        });
+        if (tid === currentChannelId) triggerSmartScroll();
+        return;
+      }
+
+      if (mtype === "done") {
+        const tid = resolveTid(msg);
+        updateChannelState(tid, prev => {
+          const newMsgs = prev.messages.map((m, i) =>
+            i === prev.messages.length - 1 && m.type === "turn" ? { ...m, streaming: false } : m
+          );
+          return { ...prev, messages: newMsgs, isStreaming: false };
+        });
+        if (tid === currentChannelId) triggerSmartScroll();
+        return;
+      }
+
+      if (mtype === "error") {
+        const tid = resolveTid(msg);
+        updateChannelState(tid, prev => ({
+          ...prev,
+          isStreaming: false,
+          messages: [...prev.messages, { role: "system", type: "user", content: "❌ " + msg.content }],
+        }));
         return;
       }
     };
 
-    ws.onclose = () => { wsStatus = "disconnected"; scheduleReconnect(); };
-    ws.onerror = () => { wsStatus = "disconnected"; };
+    ws.onclose = (e) => { wsStatus = "disconnected"; scheduleReconnect(); };
+    ws.onerror = (e) => { wsStatus = "disconnected"; };
   }
 
   // ─── Actions ─────────────────────────────────────────────────────────
   function joinChannel(channelId: string) {
     if (channelId === currentChannelId && view === "chat") return;
+    currentChannelStore.set(channelId);
     currentChannelId = channelId;
     userScrolledAway = false;
     newMsgCount = 0;
@@ -241,25 +306,26 @@
         ws.send(JSON.stringify({ type: "join_channel", channelId }));
       }
     } else {
-      channelStates = { ...channelStates, [channelId]: { ...(channelStates[channelId] || DEFAULT_STATE), unreadCount: 0 } };
+      updateChannelState(channelId, prev => ({ ...prev, unreadCount: 0 }));
       setTimeout(scrollToBottom, 100);
     }
   }
 
   let chatMessage = "";
+  let chatMessageRaw = "";
 
   function sendMessage() {
-    if (!chatMessage.trim() || wsStatus !== "connected" || !currentChannelId) return;
-    const msg = chatMessage.trim();
+    const text = (chatMessage || chatMessageRaw).trim();
+    if (!text || wsStatus !== "connected" || !currentChannelId) return;
     chatMessage = "";
+    chatMessageRaw = "";
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "send_message", channelId: currentChannelId, message: msg }));
+      ws.send(JSON.stringify({ type: "send_message", channelId: currentChannelId, message: text }));
     }
-    const existing = channelStates[currentChannelId] || DEFAULT_STATE;
-    channelStates = {
-      ...channelStates,
-      [currentChannelId]: { ...existing, messages: [...existing.messages, { role: "user", type: "user", content: msg, senderId: "user", senderName: "你" }] },
-    };
+    updateChannelState(currentChannelId, prev => ({
+      ...prev,
+      messages: [...prev.messages, { role: "user", type: "user", content: text, senderId: "user", senderName: "你" }],
+    }));
     if (!userScrolledAway) setTimeout(scrollToBottom, 100);
   }
 
@@ -294,15 +360,12 @@
         body: JSON.stringify({ agent_id: agentId })
       });
       if (!resp.ok) return;
-      var data = await resp.json();
-      if ((data.synced || 0) > 0) {
-        // 重新 join 频道加载 JSONL
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
-        }
+      console.log("[mobile] sync OK, rejoining");
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
       }
     } catch (e) {
-      console.error("[mobile] syncFromSession failed:", e);
+      console.error("[mobile] sync failed:", e);
     }
   }
 
@@ -332,9 +395,9 @@
   }
 
   function lastMessage(channelId: string): string {
-    const msgs = getState(channelId).messages;
-    if (!msgs.length) return "暂无消息";
-    const last = msgs[msgs.length - 1];
+    const state = getState(channelId);
+    if (!state.messages.length) return "暂无消息";
+    const last = state.messages[state.messages.length - 1];
     const text = last.content || last.response || "";
     return text.slice(0, 30) + (text.length > 30 ? "…" : "");
   }
@@ -344,7 +407,6 @@
     connectWs();
     return () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      // 不关闭 WS，保持后台接收
     };
   });
   onDestroy(() => {
@@ -356,7 +418,6 @@
   {#if view === "list"}
     <!-- ─── 频道列表视图 ─────────────────────────── -->
     <div class="list-view">
-      <!-- 子 Tab -->
       <div class="sub-tabs">
         <button class="sub-tab {listTab === 'channels' ? 'active' : ''}" on:click={() => { listTab = 'channels'; }}>
           频道
@@ -366,7 +427,6 @@
         </button>
       </div>
 
-      <!-- WS 状态 -->
       <div class="ws-bar">
         <span class="ws-dot {wsStatus}"></span>
         <span class="ws-text">{wsStatus === 'connected' ? '已连接' : wsStatus === 'connecting' ? '连接中...' : '未连接'}</span>
@@ -375,35 +435,26 @@
       <div class="channel-list">
         {#if listTab === 'channels'}
           {#each domainChannels as ch}
-            {@const state = getState(ch.id)}
-            <button class="ch-item {currentChannelId === ch.id ? 'selected' : ''}" on:click={() => joinChannel(ch.id)}>
+            <button class="ch-item" on:click={() => joinChannel(ch.id)}>
               <span class="ch-icon">{ch.icon}</span>
               <div class="ch-info">
                 <div class="ch-name">{ch.name}</div>
                 <div class="ch-preview">{lastMessage(ch.id)}</div>
               </div>
-              {#if state.unreadCount > 0}
-                <span class="unread-badge">{state.unreadCount > 99 ? '99+' : state.unreadCount}</span>
-              {/if}
             </button>
           {/each}
           {#if domainChannels.length === 0}
             <div class="empty-tip">加载中...</div>
           {/if}
         {:else}
-          <!-- 私聊列表 -->
           {#each Object.entries(AGENT_PROFILES) as [agentId, profile]}
             {@const dmId = `dm-${agentId}`}
-            {@const state = getState(dmId)}
-            <button class="ch-item {currentChannelId === dmId ? 'selected' : ''}" on:click={() => joinChannel(dmId)}>
+            <button class="ch-item" on:click={() => joinChannel(dmId)}>
               <span class="ch-icon">{profile.emoji}</span>
               <div class="ch-info">
                 <div class="ch-name">{profile.name}</div>
                 <div class="ch-preview ch-role">{profile.role}</div>
               </div>
-              {#if state.unreadCount > 0}
-                <span class="unread-badge">{state.unreadCount > 99 ? '99+' : state.unreadCount}</span>
-              {/if}
             </button>
           {/each}
         {/if}
@@ -412,9 +463,7 @@
 
   {:else}
     <!-- ─── 聊天视图 ─────────────────────────────── -->
-    {@const state = getState(currentChannelId)}
     <div class="chat-view">
-      <!-- 聊天顶栏 -->
       <div class="chat-header">
         <button class="back-btn" on:click={() => { view = 'list'; }}>←</button>
         <span class="chat-icon">{getChannelIcon(currentChannelId)}</span>
@@ -423,29 +472,26 @@
         <span class="ws-dot-small {wsStatus}"></span>
       </div>
 
-      <!-- 消息列表 -->
       <div
         class="msg-list"
         bind:this={chatScrollEl}
         on:scroll={handleScroll}
       >
-        {#if state.messages.length === 0}
+        {#if $currentMessages.length === 0}
           <div class="empty-chat">
             <div style="font-size:28px;margin-bottom:8px;">💬</div>
             <div>发送消息开始对话</div>
           </div>
         {/if}
 
-        {#each state.messages as item}
+        {#each $currentMessages as item}
           {#if item.type === "user"}
-            <!-- 用户气泡（靠右蓝色） -->
             <div class="bubble-row user-row">
               <div class="bubble user-bubble">
                 {item.content || ""}
               </div>
             </div>
           {:else if item.type === "turn"}
-            <!-- Agent 消息（靠左深色卡片） -->
             <div class="bubble-row agent-row">
               <div class="agent-avatar" style="background: linear-gradient(135deg,{AGENT_PROFILES[item.senderId || '']?.color || '#7c3aed'}88,{AGENT_PROFILES[item.senderId || '']?.color || '#7c3aed'});">
                 {AGENT_PROFILES[item.senderId || ""]?.emoji || "🤖"}
@@ -483,24 +529,23 @@
           {/if}
         {/each}
 
-        {#if state.isStreaming}
+        {#if $currentIsStreaming}
           <div class="streaming-indicator">
             <span class="dot-pulse"></span>AI 正在回复中...
           </div>
         {/if}
       </div>
 
-      <!-- 新消息提示 -->
       {#if userScrolledAway && newMsgCount > 0}
         <button class="new-msg-btn" on:click={() => { userScrolledAway = false; newMsgCount = 0; scrollToBottom(); }}>
           ⬇ {newMsgCount} 条新消息
         </button>
       {/if}
 
-      <!-- 输入区 -->
       <div class="input-area">
         <textarea
           bind:value={chatMessage}
+          on:input={(e) => { chatMessageRaw = e.target.value; }}
           on:keydown={handleInputKeydown}
           placeholder="发送消息... (Enter 发送)"
           rows={3}
@@ -527,7 +572,6 @@
     overflow: hidden;
   }
 
-  /* ─── List View ──────────────────────────── */
   .list-view {
     display: flex;
     flex-direction: column;
@@ -615,7 +659,7 @@
     min-height: 60px;
   }
 
-  .ch-item:active, .ch-item.selected {
+  .ch-item:active {
     background: rgba(0,229,255,0.06);
   }
 
@@ -654,16 +698,6 @@
     font-size: 12px;
   }
 
-  .unread-badge {
-    background: #ef4444;
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
-    border-radius: 10px;
-    padding: 2px 7px;
-    flex-shrink: 0;
-  }
-
   .empty-tip {
     text-align: center;
     padding: 40px 20px;
@@ -671,7 +705,6 @@
     font-size: 14px;
   }
 
-  /* ─── Chat View ──────────────────────────── */
   .chat-view {
     display: flex;
     flex-direction: column;
@@ -749,7 +782,6 @@
     padding: 40px 20px;
   }
 
-  /* ─── Bubbles ────────────────────────────── */
   .bubble-row {
     display: flex;
   }
@@ -906,7 +938,6 @@
     width: calc(100% - 28px);
   }
 
-  /* ─── Input Area ─────────────────────────── */
   .input-area {
     padding: 10px 14px;
     border-top: 1px solid rgba(0,229,255,0.1);
@@ -923,7 +954,7 @@
     border-radius: 10px;
     padding: 10px 12px;
     color: #F0F9FF;
-    font-size: 16px; /* iOS 防缩放 */
+    font-size: 16px;
     resize: none;
     outline: none;
     line-height: 1.5;

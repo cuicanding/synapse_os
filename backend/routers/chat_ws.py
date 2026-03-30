@@ -543,11 +543,8 @@ async def websocket_chat(ws: WebSocket):
                                     # If buf has content, streaming already delivered it to client, just send done
                                     await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
                                 else:
-                                    # lifecycle/end arrived first but didn't send done (no streaming content)
-                                    # Now deliver the complete message
-                                    if text:
-                                        await ws.send_json({"type": "delta", "content": text, "agent": agent_id, "channelId": ch_id})
-                                    await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
+                                    # lifecycle/end already handled this agent completely, skip to avoid duplicates
+                                    pass
                                 agent_streamed.discard(agent_id)
                                 streaming_buffers.pop(agent_id, "")
                                 run_id = payload.get("runId", "")

@@ -236,7 +236,10 @@
     const assignee = task.assignee || task.creator || "";
     // Map assignee name to agent id
     const agentMap: Record<string, string> = {
-      "周华健": "quant-lead",
+      "周华健": "zhouhuajian",
+      "任贤齐": "renxianqi",
+      "阿牛": "aniu",
+      "周星驰": "zhouxingchi",
       "里德": "reed",
       "里德（Reed）": "reed",
       "苏珊": "susan",

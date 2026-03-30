@@ -518,13 +518,13 @@ def _get_current_task_status(task_id: str) -> str:
                     if in_execution_section and "**状态**:" in line:
                         m = re.search(r"\*\*状态\*\*:\s*(.+)", line)
                         if m:
-                            return m.group(1).strip()
+                            return m.group(1).strip().strip("`")
 
                 # 2. Fallback: search entire file for status field
                 for line in lines:
                     m = re.search(r"[-*]\s*\*\*状态\*\*:\s*(.+)", line)
                     if m:
-                        return m.group(1).strip()
+                        return m.group(1).strip().strip("`")
                     # Also match bare **状态**: without list prefix
                     if not result:
                         m2 = re.match(r"\*\*状态\*\*:\s*(.+)", line)

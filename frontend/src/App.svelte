@@ -17,21 +17,9 @@
   let authChecked = false;
 
   async function checkAuth() {
-    try {
-      const r = await fetch("/api/auth");
-      const data = await r.json();
-      authEnabled = data.enabled;
-      if (!authEnabled) {
-        loggedIn = true;
-      } else {
-        const probe = await fetch("/api/missions");
-        loggedIn = probe.status !== 401;
-      }
-    } catch {
-      loggedIn = false;
-    } finally {
-      authChecked = true;
-    }
+    authChecked = true;
+    loggedIn = true;
+    return;
   }
 
   function handleUnauthorized() {
@@ -46,7 +34,15 @@
   let isMobileRoute = false;
 
   function detectRoute() {
+    const hash = window.location.hash || "";
     const path = window.location.pathname;
+
+    // Hash route: #/mobile
+    if (hash === "#/mobile" || hash.startsWith("#/mobile")) {
+      isMobileRoute = true;
+      return;
+    }
+    // Path route: /mobile
     if (path === "/mobile") {
       isMobileRoute = true;
       return;
@@ -78,6 +74,7 @@
   function handleHashChange() {
     hash = location.hash || "#/";
     currentTab = getTab(hash);
+    detectRoute();
   }
 
   // ─── Particle canvas ─────────────────────────────────────────────────

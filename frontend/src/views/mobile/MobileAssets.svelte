@@ -45,11 +45,18 @@
   }
 
   // ─── Flatten all assets ───────────────────────────────────────────────
-  $: allAssets = (grouped.domains || []).flatMap((d: any) =>
+  // 域排序：基础设施和金蟾量化优先
+  const DOMAIN_ORDER = ["infrastructure", "quant", "online", "offline", "growth", "marketing"];
+  $: sortedDomains = [...(grouped.domains || [])].sort((a: any, b: any) => {
+    const ai = DOMAIN_ORDER.indexOf(a.id);
+    const bi = DOMAIN_ORDER.indexOf(b.id);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  $: allAssets = sortedDomains.flatMap((d: any) =>
     (d.assets || []).map((a: any) => ({ ...a, domainId: d.id, domainName: d.name || d.id }))
   );
 
-  $: domains = grouped.domains || [];
 
   // ─── Relative time ────────────────────────────────────────────────────
   function relTime(dateStr?: string): string {
@@ -154,7 +161,7 @@
       <button class="domain-btn {filterDomain === '' ? 'active' : ''}" on:click={() => setDomain('')}>
         全部
       </button>
-      {#each domains as domain}
+      {#each sortedDomains as domain}
         <button
           class="domain-btn {filterDomain === domain.id ? 'active' : ''}"
           on:click={() => setDomain(domain.id)}

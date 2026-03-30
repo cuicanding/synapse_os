@@ -482,12 +482,10 @@
       });
       if (!resp.ok) return;
       var data = await resp.json();
-      if ((data.synced || 0) > 0) {
-        // 重新 join 频道，从 JSONL 加载最新数据
-        joinedChannels.delete(currentChannelId);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
-        }
+      // Always rejoin to refresh from JSONL, even if synced === 0
+      joinedChannels.delete(currentChannelId);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
       }
     } catch (e) {
       console.error("[chat] syncFromSession failed:", e);

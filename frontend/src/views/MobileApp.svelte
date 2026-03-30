@@ -1,10 +1,23 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import MobileWorkbench from "./mobile/MobileWorkbench.svelte";
   import MobileTasks from "./mobile/MobileTasks.svelte";
   import MobileAssets from "./mobile/MobileAssets.svelte";
+  import { tasks } from "../lib/stores";
+  import { startWs } from "../lib/ws";
 
   type Tab = "workbench" | "tasks" | "assets";
   let activeTab: Tab = "workbench";
+
+  onMount(async () => {
+    // 加载任务数据
+    try {
+      const res = await fetch("/api/tasks");
+      if (res.ok) tasks.set(await res.json());
+    } catch (e) { console.error("[mobile] tasks load failed:", e); }
+    // 启动 WebSocket 实时更新
+    startWs();
+  });
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "workbench", label: "工作台", icon: "💬" },
