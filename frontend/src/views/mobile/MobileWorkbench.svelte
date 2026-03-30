@@ -330,7 +330,7 @@
   }
 
   function handleInputKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && e.ctrlKey) {
       e.preventDefault();
       sendMessage();
     }
@@ -547,7 +547,7 @@
           bind:value={chatMessage}
           on:input={(e) => { chatMessageRaw = e.target.value; }}
           on:keydown={handleInputKeydown}
-          placeholder="发送消息... (Enter 发送)"
+          placeholder="发送消息... (Ctrl+Enter 发送)"
           rows={3}
           class="msg-input"
           style="font-size:16px;"

@@ -82,6 +82,16 @@
     reed: { name: '里德', emoji: '🔧', color: '#00E5FF', role: '架构师' },
   };
 
+  // ─── 侧栏状态 ──────────────────────────────────────────────────────
+  let sidebarCollapsed = false;
+  let sidebarWidth = 200;
+  function updateSidebarWidth() {
+    const w = window.innerWidth;
+    if (w < 640) { sidebarCollapsed = true; sidebarWidth = 180; }
+    else if (w < 900) { sidebarWidth = 180; }
+    else { sidebarWidth = 200; }
+  }
+
   const agents = [
     { id: "main", name: "果爸", emoji: "👑", desc: "总经理", color: "#f59e0b" },
     { id: "susan", name: "苏珊", emoji: "🎯", desc: "产品设计师", color: "#06b6d4" },
@@ -495,6 +505,8 @@
 
   // ==================== Lifecycle ====================
   onMount(function() {
+    updateSidebarWidth();
+    window.addEventListener('resize', updateSidebarWidth);
     connectChatWs();
     if (chatScrollEl) { chatScrollEl.addEventListener('scroll', handleScroll); }
 
@@ -517,14 +529,17 @@
     };
   });
 
-  onDestroy(function() {});
+  onDestroy(function() {
+    window.removeEventListener('resize', updateSidebarWidth);
+  });
 </script>
 
 <!-- 三栏布局容器 -->
-<div style="height:100%;min-height:0;display:flex;background:rgba(11,16,30,0.98);">
+<div style="height:100%;min-height:0;display:flex;background:rgba(11,16,30,0.98);position:relative;">
   
-  <!-- 频道侧栏 (200px) -->
-  <div style="width:200px;background:rgba(11,16,30,0.98);border-right:1px solid rgba(0,229,255,0.1);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto;">
+  <!-- 频道侧栏 -->
+  {#if !sidebarCollapsed}
+  <div class="wb-sidebar" style="width:{sidebarWidth}px;">
     <!-- 频道列表标题 -->
     <div style="padding:16px 12px 8px;display:flex;align-items:center;justify-content:space-between;">
       <span style="font-size:12px;font-weight:600;color:#00e5ff;text-transform:uppercase;letter-spacing:1px;">💬 频道</span>
@@ -661,6 +676,12 @@
       {/each}
     </div>
   </div>
+  {/if}
+
+  <!-- 侧栏收起时的展开按钮 -->
+  {#if sidebarCollapsed}
+  <button class="sidebar-toggle-collapsed" on:click={() => { sidebarCollapsed = false; }} title="展开频道">💬</button>
+  {/if}
 
   <!-- 主内容区域 (flex-1) -->
   <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
@@ -668,6 +689,14 @@
     {#if currentChannelId}
       <div style="padding:12px 20px;border-bottom:1px solid rgba(0,229,255,0.1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:8px;">
+          <button
+            type="button"
+            class="sidebar-toggle-btn"
+            on:click={() => { sidebarCollapsed = !sidebarCollapsed; }}
+            title={sidebarCollapsed ? "展开频道" : "收起频道"}
+          >
+            {sidebarCollapsed ? '→' : '←'}
+          </button>
           {#if currentChannelObj}
             <span style="font-size:18px;">{currentChannelObj.icon}</span>
             <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannelObj.name}</span>
@@ -806,11 +835,11 @@
     <div style="padding:16px 20px;border-top:1px solid rgba(0,229,255,0.1);flex-shrink:0;">
       <textarea
         bind:value={chatMessage}
-        placeholder={currentChannelId ? "输入消息... (Enter 发送, Shift+Enter 换行)" : "请先选择一个频道"}
-        on:keydown={function(e) { 
-          if (e.key === 'Enter' && !e.shiftKey && currentChannelId) { 
-            e.preventDefault(); 
-            sendMessage(); 
+        placeholder={currentChannelId ? "输入消息... (Ctrl+Enter 发送)" : "请先选择一个频道"}
+        on:keydown={function(e) {
+          if (e.key === 'Enter' && e.ctrlKey && currentChannelId) {
+            e.preventDefault();
+            sendMessage();
           }
         }}
         disabled={!currentChannelId}
@@ -864,5 +893,64 @@
   }
   .dm-member-btn:hover {
     background: rgba(255, 255, 255, 0.04) !important;
+  }
+
+  /* ─── Sidebar responsive ────────────────── */
+  .wb-sidebar {
+    background: rgba(11,16,30,0.98);
+    border-right: 1px solid rgba(0,229,255,0.1);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+    min-width: 0;
+    transition: width 0.2s ease;
+  }
+
+  .sidebar-toggle-btn {
+    background: rgba(0,229,255,0.08);
+    border: 1px solid rgba(0,229,255,0.2);
+    color: #00e5ff;
+    font-size: 14px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    min-width: 28px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+  }
+  .sidebar-toggle-btn:hover {
+    background: rgba(0,229,255,0.15);
+  }
+
+  .sidebar-toggle-collapsed {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 20;
+    background: rgba(11,16,30,0.95);
+    border: 1px solid rgba(0,229,255,0.2);
+    border-left: none;
+    color: #00e5ff;
+    font-size: 16px;
+    padding: 8px 4px;
+    border-radius: 0 8px 8px 0;
+    cursor: pointer;
+    writing-mode: vertical-lr;
+    transition: background 0.15s;
+  }
+  .sidebar-toggle-collapsed:hover {
+    background: rgba(0,229,255,0.1);
+  }
+
+  @media (max-width: 640px) {
+    .wb-sidebar {
+      width: 100% !important;
+      max-width: 280px;
+    }
   }
 </style>

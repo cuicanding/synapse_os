@@ -243,7 +243,7 @@
       </main>
 
       {#if $showWorkbench}
-        <div style="width:960px;flex-shrink:0;border-left:1px solid rgba(0,229,255,0.15);background:rgba(11,16,30,0.98);overflow:hidden;">
+        <div class="workbench-container" style="flex-shrink:0;border-left:1px solid rgba(0,229,255,0.15);background:rgba(11,16,30,0.98);overflow:hidden;">
           <WorkbenchPanel />
         </div>
       {/if}
@@ -279,5 +279,34 @@
     background: var(--cyber-amber); color: var(--bg-deep);
     font-size: 10px; font-weight: 700; font-family: monospace; border-radius: 9px;
     animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  .workbench-container {
+    width: 960px;
+    max-width: 50vw;
+    min-width: 320px;
+  }
+
+  @media (max-width: 1200px) {
+    .workbench-container {
+      max-width: 55vw;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .workbench-container {
+      max-width: 60vw;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .workbench-container {
+      width: 100vw;
+      max-width: 100vw;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      border-left: none;
+    }
   }
 </style>

@@ -25,9 +25,37 @@
     task_summary: string;
     status: string;
     created_at: string;
+    relative_time?: string;
   }
   let collaborations: Collaboration[] = [];
   let showAllCollaborations = false;
+
+  // Agent statuses from auto-aggregation API
+  interface AgentAutoStatus {
+    agent_id: string;
+    name: string;
+    emoji: string;
+    role: string;
+    status: string; // idle | busy | offline | unknown
+    working_state: string;
+    current_task: string;
+    last_active: string;
+    relative_active: string;
+  }
+  let agentAutoStatuses: Record<string, AgentAutoStatus> = {};
+
+  // Today activities from auto-aggregation API
+  interface TodayActivity {
+    agent_id: string;
+    agent_name: string;
+    agent_emoji: string;
+    role: string;
+    type: string;
+    content: string;
+    timestamp: string;
+    relative_time: string;
+  }
+  let todayActivities: TodayActivity[] = [];
 
   async function fetchCollaborations() {
     try {
@@ -38,6 +66,48 @@
       }
     } catch (e) {
       console.warn("[team] Failed to fetch collaborations:", e);
+    }
+  }
+
+  // Latest activity per agent (for card preview)
+  let latestActivity: Record<string, TodayActivity | null> = {};
+
+  async function fetchTodayPreview() {
+    try {
+      const r = await fetch("/api/today-activities");
+      if (r.ok) {
+        const data = await r.json();
+        const map: Record<string, TodayActivity | null> = {};
+        for (const agent_id of AGENT_IDS) {
+          map[agent_id] = null;
+        }
+        for (const a of (data.activities || [])) {
+          if (!map[a.agent_id]) {
+            map[a.agent_id] = a;
+          }
+        }
+        latestActivity = map;
+      }
+    } catch (e) {
+      console.warn("[team] Failed to fetch today preview:", e);
+    }
+  }
+
+  const AGENT_IDS = ["main", "susan", "reed", "zhouhuajian", "renxianqi", "aniu", "zhouxingchi"];
+
+  async function fetchAgentStatuses() {
+    try {
+      const r = await fetch("/api/agent-statuses");
+      if (r.ok) {
+        const data = await r.json();
+        const map: Record<string, AgentAutoStatus> = {};
+        for (const a of (data.agents || [])) {
+          map[a.agent_id] = a;
+        }
+        agentAutoStatuses = map;
+      }
+    } catch (e) {
+      console.warn("[team] Failed to fetch agent-statuses:", e);
     }
   }
 
@@ -337,30 +407,22 @@
     return "暂无动态";
   }
 
-  // Open today modal and fetch records
+  // Open today modal and fetch activities from auto-aggregation API
   async function openTodayModal(card: RoleSlotCard) {
     if (!card.agentId) return;
     todayModalAgent = card;
     showTodayModal = true;
     todayLoading = true;
-    todayRecords = [];
+    todayActivities = [];
 
     try {
-      // Get today's start time
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const fromTime = today.toISOString();
-
-      const response = await fetchStatusHistory({
-        agent_id: card.agentId,
-        page: 1,
-        limit: 50
-      });
-
-      // Filter records from today
-      todayRecords = (response.records || []).filter(r => r.created_at >= fromTime);
+      const r = await fetch(`/api/today-activities?agent_id=${card.agentId}`);
+      if (r.ok) {
+        const data = await r.json();
+        todayActivities = data.activities || [];
+      }
     } catch (e) {
-      console.error("[team] Failed to fetch today records:", e);
+      console.error("[team] Failed to fetch today activities:", e);
     } finally {
       todayLoading = false;
     }
@@ -391,7 +453,9 @@
     loadAgentStatus();
     refresh();
     fetchCollaborations();
-    refreshTimer = setInterval(() => { refresh(); loadTeamAgents(); loadAgentStatus(); fetchCollaborations(); }, 30000);
+    fetchAgentStatuses();
+    fetchTodayPreview();
+    refreshTimer = setInterval(() => { refresh(); loadTeamAgents(); loadAgentStatus(); fetchCollaborations(); fetchAgentStatuses(); fetchTodayPreview(); }, 30000);
   });
 
   onDestroy(() => {
@@ -584,6 +648,8 @@
                 <!-- 人员信息 -->
                 {#if card.agentNames.length > 0}
                   {#each card.agentNames as name, ni}
+                    {@const autoStatus = card.agentId ? agentAutoStatuses[card.agentId] : null}
+                    {@const statusLight = !autoStatus ? '⚪' : autoStatus.status === 'busy' ? '🔴' : autoStatus.status === 'idle' ? '🟢' : autoStatus.status === 'offline' ? '🌑' : '⚪'}
                     <div class="flex items-center gap-2 {ni > 0 ? 'mt-1.5 pt-1.5 border-t border-white/5' : 'mb-2'}">
                       <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500/60 to-amber-700/60 flex items-center justify-center">
                         <span class="font-orbitron text-xs font-bold text-txt-primary">
@@ -591,7 +657,10 @@
                         </span>
                       </div>
                       <div class="flex-1 min-w-0">
-                        <p class="text-sm font-semibold text-txt-primary truncate">{name}</p>
+                        <p class="text-sm font-semibold text-txt-primary truncate">{name} {statusLight}</p>
+                        {#if autoStatus && autoStatus.role}
+                          <p class="text-xs text-txt-secondary truncate">{autoStatus.role}</p>
+                        {/if}
                       </div>
                     </div>
                   {/each}
@@ -618,24 +687,24 @@
                   {@const isBusy = smd ? smd.work_status.includes("忙碌") : false}
                   {@const isIdle = smd ? smd.work_status.includes("空闲") : false}
                   {@const hasAgent = !!card.agentId}
+                  {@const recentAct = card.agentId ? latestActivity[card.agentId] : null}
                   <div class="mt-3 pt-3 border-t border-white/5 space-y-1.5">
-                    <!-- 红绿灯 + 动态 -->
-                    <div class="flex items-start gap-2">
-                      <span class="text-sm mt-0.5 flex-shrink-0">{smd ? (isBusy ? '🔴' : '🟢') : (hasAgent ? '⚪' : '⚪')}</span>
-                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2 flex-1" title={smd?.current_task || card.currentTask || '暂无'}>
-                        {smd?.current_task || card.currentTask || (hasAgent ? '暂无动态' : '—')}
+                    <!-- 最近动态（从 session 自动提取） -->
+                    {#if recentAct}
+                      <div class="flex items-start gap-1.5">
+                        <span class="text-xs flex-shrink-0 mt-0.5">{recentAct.role === 'assistant' ? '💬' : '📨'}</span>
+                        <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2" title={recentAct.content}>
+                          {recentAct.content}
+                        </p>
+                      </div>
+                      <span class="text-xs text-txt-secondary/50 font-mono">{recentAct.relative_time}</span>
+                    {:else if smd?.current_task && smd.current_task !== '无'}
+                      <p class="text-xs text-txt-primary/80 font-chinese line-clamp-2" title={smd.current_task}>
+                        {smd.current_task}
                       </p>
-                    </div>
-
-                    <!-- 状态 + 时间 -->
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs {isBusy ? 'text-cyber-amber' : isIdle ? 'text-cyber-green' : 'text-txt-secondary'}">
-                        {smd ? smd.work_status : (hasAgent ? '⚪ 离线' : '⚪ 无接入')}
-                      </span>
-                      <span class="text-xs text-txt-secondary/50 font-mono">
-                        {smd?.last_update || timeAgo(card.lastReportAt)}
-                      </span>
-                    </div>
+                    {:else}
+                      <p class="text-xs text-txt-secondary font-chinese">{hasAgent ? '今日暂无活动' : '—'}</p>
+                    {/if}
                   </div>
                 {/if}
 
@@ -683,32 +752,28 @@
             <div class="animate-spin w-6 h-6 border-2 border-cyber-cyan/30 border-t-cyber-cyan rounded-full mx-auto mb-3"></div>
             <p class="text-sm text-txt-secondary">加载中...</p>
           </div>
-        {:else if todayRecords.length === 0}
+        {:else if todayActivities.length === 0}
           <div class="text-center py-8">
             <p class="text-3xl mb-3">📭</p>
-            <p class="text-sm text-txt-secondary">今日暂无上报记录</p>
+            <p class="text-sm text-txt-secondary">今日暂无活动记录</p>
           </div>
         {:else}
-          <div class="space-y-3">
-            {#each todayRecords as record}
-              <div class="glass-card p-3 rounded-lg border border-white/5">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-mono text-cyber-cyan">{formatTime(record.created_at)}</span>
-                  <span class="text-xs">{getRecordTypeIcon(record.type)}</span>
+          <div class="space-y-2">
+            {#each todayActivities as activity}
+              <div class="flex gap-3 py-2 border-b border-white/5 last:border-0">
+                <div class="flex-shrink-0 mt-0.5">
+                  {#if activity.role === 'assistant'}
+                    <span class="text-cyber-cyan text-sm">💬</span>
+                  {:else}
+                    <span class="text-txt-secondary text-sm">📨</span>
+                  {/if}
                 </div>
-                {#if record.progress_detail}
-                  <p class="text-sm text-txt-primary font-chinese mb-2">{record.progress_detail}</p>
-                {/if}
-                <div class="space-y-1">
-                  {#if record.difficulty}
-                    <p class="text-xs text-cyber-red/80 font-chinese">🚨 {record.difficulty}</p>
-                  {/if}
-                  {#if record.needs_help}
-                    <p class="text-xs text-cyber-amber/80 font-chinese">📣 需求: {record.needs_help}</p>
-                  {/if}
-                  {#if record.needs_decision}
-                    <p class="text-xs text-cyber-violet/80 font-chinese">🔔 待决策: {record.needs_decision}</p>
-                  {/if}
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-xs font-mono text-cyber-cyan/70">{activity.relative_time || formatTime(activity.timestamp)}</span>
+                    <span class="text-xs text-txt-secondary">{activity.role === 'assistant' ? '回复' : '收到'}</span>
+                  </div>
+                  <p class="text-sm text-txt-primary/90 line-clamp-3 font-chinese">{activity.content}</p>
                 </div>
               </div>
             {/each}
