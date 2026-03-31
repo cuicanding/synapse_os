@@ -373,7 +373,7 @@
   </div>
 
   <!-- Stats -->
-  <div class="grid grid-cols-5 gap-4">
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
     <div class="glass-card p-4 space-y-1 text-center">
       <p class="font-orbitron text-2xl font-bold neon-cyan">{totalCount}</p>
       <p class="text-xs text-txt-secondary font-mono">总任务</p>
@@ -397,21 +397,21 @@
   </div>
 
   <!-- Filters -->
-  <div class="glass-card p-4 flex flex-wrap items-center gap-4">
-    <div class="flex items-center gap-2">
-      <span class="text-xs font-mono text-txt-secondary">使命:</span>
+  <div class="glass-card p-4 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3">
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <span class="text-xs font-mono text-txt-secondary shrink-0">使命:</span>
       <select bind:value={filterMission}
-        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
+        class="flex-1 sm:flex-none bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
         <option value="">全部</option>
         {#each uniqueMissions as mid}
           <option value={mid}>{missionTitle(mid)}</option>
         {/each}
       </select>
     </div>
-    <div class="flex items-center gap-2">
-      <span class="text-xs font-mono text-txt-secondary">状态:</span>
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <span class="text-xs font-mono text-txt-secondary shrink-0">状态:</span>
       <select bind:value={filterStatus}
-        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
+        class="flex-1 sm:flex-none bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
         <option value="">全部</option>
         <option value="pending">待分配</option>
         <option value="assigned">已分配</option>
@@ -424,20 +424,20 @@
         <option value="archived">已归档</option>
       </select>
     </div>
-    <div class="flex items-center gap-2">
-      <span class="text-xs font-mono text-txt-secondary">负责人:</span>
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <span class="text-xs font-mono text-txt-secondary shrink-0">负责人:</span>
       <select bind:value={filterAssignee}
-        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
+        class="flex-1 sm:flex-none bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
         <option value="">全部</option>
         {#each uniqueAssignees as a}
           <option value={a}>{a}</option>
         {/each}
       </select>
     </div>
-    <div class="flex items-center gap-2">
-      <span class="text-xs font-mono text-txt-secondary">领域:</span>
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <span class="text-xs font-mono text-txt-secondary shrink-0">领域:</span>
       <select bind:value={filterDomain}
-        class="bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
+        class="flex-1 sm:flex-none bg-bg-light/40 border border-white/10 rounded px-2 py-1 text-xs font-mono text-txt-primary focus:border-cyber-cyan/40 focus:outline-none">
         <option value="">全部</option>
         {#each uniqueDomains as d}
           <option value={d}>{DOMAIN_LABELS[d] || d}</option>
@@ -445,10 +445,10 @@
       </select>
     </div>
 
-    <div class="flex-1"></div>
+    <div class="hidden sm:block flex-1"></div>
 
-    <div class="flex items-center gap-2">
-      <span class="text-xs font-mono text-txt-secondary">排序:</span>
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <span class="text-xs font-mono text-txt-secondary shrink-0">排序:</span>
       <button on:click={() => sortBy = "status"}
         class="px-2 py-1 rounded text-xs font-mono {sortBy === 'status' ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan/30' : 'bg-bg-light/30 text-txt-secondary border border-white/10'} transition-colors">
         状态
@@ -457,9 +457,8 @@
         class="px-2 py-1 rounded text-xs font-mono {sortBy === 'time' ? 'bg-cyber-cyan/20 text-cyber-cyan border border-cyber-cyan/30' : 'bg-bg-light/30 text-txt-secondary border border-white/10'} transition-colors">
         时间
       </button>
+      <span class="text-xs font-mono text-txt-secondary ml-2">{sorted.length} 条结果</span>
     </div>
-
-    <span class="text-xs font-mono text-txt-secondary">{sorted.length} 条结果</span>
   </div>
 
   <!-- Task List -->

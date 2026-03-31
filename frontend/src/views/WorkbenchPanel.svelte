@@ -85,11 +85,28 @@
   // ─── 侧栏状态 ──────────────────────────────────────────────────────
   let sidebarCollapsed = false;
   let sidebarWidth = 200;
+  let isMobile = false;
+  let sidebarOpen = false; // 移动端 overlay 开关
+
   function updateSidebarWidth() {
     const w = window.innerWidth;
-    if (w < 640) { sidebarCollapsed = true; sidebarWidth = 180; }
-    else if (w < 900) { sidebarWidth = 180; }
-    else { sidebarWidth = 200; }
+    isMobile = w < 640;
+    if (isMobile) {
+      sidebarCollapsed = false; // 桌面端逻辑不干扰移动端
+      sidebarWidth = 280;
+    } else if (w < 900) {
+      sidebarWidth = 180;
+    } else {
+      sidebarWidth = 200;
+    }
+  }
+
+  function toggleMobileSidebar() {
+    sidebarOpen = !sidebarOpen;
+  }
+
+  function closeMobileSidebar() {
+    if (isMobile) sidebarOpen = false;
   }
 
   const agents = [
@@ -177,7 +194,15 @@
     var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(wsProtocol + "//" + wsHost + ":" + window.location.port + "/ws/chat");
 
-    ws.onopen = function() { wsStatus = "connected"; };
+    ws.onopen = function() {
+      wsStatus = "connected";
+      // Rejoin current channel after reconnect
+      if (currentChannelId) {
+        console.log('[chat] reconnect: rejoining', currentChannelId);
+        joinedChannels.delete(currentChannelId);
+        ws.send(JSON.stringify({ type: "join_channel", channelId: currentChannelId }));
+      }
+    };
 
     ws.onmessage = function(event) {
       var msg = JSON.parse(event.data);
@@ -319,6 +344,7 @@
 
       // 流式消息处理（绑定到频道）
       if (msg.type === "delta" || msg.type === "thinking" || msg.type === "done" || msg.type === "error") {
+        console.log('[chat] stream msg:', msg.type, 'channel:', msg.channelId, 'current:', currentChannelId);
         var targetChannelId = msg.channelId || currentChannelId;
         var existingState = channelStates[targetChannelId] || DEFAULT_CHANNEL_STATE;
         var messages = existingState.messages;
@@ -405,8 +431,20 @@
       }
     };
 
-    ws.onclose = function() { wsStatus = "disconnected"; };
-    ws.onerror = function() { wsStatus = "disconnected"; };
+    ws.onclose = function() {
+      wsStatus = "disconnected";
+      // Auto-reconnect chat WebSocket after 2s
+      console.log('[chat] disconnected, reconnecting in 2s...');
+      setTimeout(function() {
+        if (wsStatus === "disconnected") {
+          connectChatWs();
+        }
+      }, 2000);
+    };
+    ws.onerror = function(err) {
+      console.error('[chat] error', err);
+      wsStatus = "disconnected";
+    };
   }
 
   // ==================== Actions ====================
@@ -455,11 +493,15 @@
   }
 
   function joinChannel(channelId: string) {
-    if (channelId === currentChannelId) return;
+    if (channelId === currentChannelId) {
+      closeMobileSidebar();
+      return;
+    }
     
     currentChannelId = channelId;
     userScrolledAway = false;
     newMsgCount = 0;
+    closeMobileSidebar(); // 点击频道后自动收起移动端 sidebar
     
     // 如果还没加入过这个频道，则发送加入请求
     if (!joinedChannels.has(channelId)) {
@@ -537,9 +579,22 @@
 <!-- 三栏布局容器 -->
 <div style="height:100%;min-height:0;display:flex;background:rgba(11,16,30,0.98);position:relative;">
   
+  <!-- 移动端遮罩层 -->
+  {#if isMobile && sidebarOpen}
+    <div
+      style="position:fixed;inset:0;z-index:40;background:rgba(0,0,0,0.6);backdrop-filter:blur(2px);"
+      on:click={closeMobileSidebar}
+    ></div>
+  {/if}
+
   <!-- 频道侧栏 -->
-  {#if !sidebarCollapsed}
-  <div class="wb-sidebar" style="width:{sidebarWidth}px;">
+  {#if !sidebarCollapsed || isMobile}
+  <div
+    class="wb-sidebar"
+    class:wb-sidebar-mobile={isMobile}
+    class:wb-sidebar-mobile-open={isMobile && sidebarOpen}
+    style={isMobile ? '' : `width:${sidebarWidth}px;`}
+  >
     <!-- 频道列表标题 -->
     <div style="padding:16px 12px 8px;display:flex;align-items:center;justify-content:space-between;">
       <span style="font-size:12px;font-weight:600;color:#00e5ff;text-transform:uppercase;letter-spacing:1px;">💬 频道</span>
@@ -607,7 +662,7 @@
               style="flex:1;display:flex;align-items:center;gap:6px;padding:0 6px;height:36px;background:none;border:none;border-left:{isSelected ? '3px solid #00e5ff' : '3px solid transparent'};cursor:pointer;text-align:left;color:inherit;font-family:inherit;font-size:inherit;"
             >
               <span style="font-size:15px;">{channel.icon}</span>
-              <span style="flex:1;font-size:13px;font-weight:500;color:{isSelected ? '#e2e8f0' : '#94a3b8'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              <span style="flex:1;font-size:13px;font-weight:500;color:{isSelected ? '#e2e8f0' : '#94a3b8'};word-break:break-all;overflow-wrap:break-word;min-width:0;">
                 {channel.name}
               </span>
               <!-- 在线人数 -->
@@ -678,8 +733,8 @@
   </div>
   {/if}
 
-  <!-- 侧栏收起时的展开按钮 -->
-  {#if sidebarCollapsed}
+  <!-- 侧栏收起时的展开按钮（仅桌面端） -->
+  {#if !isMobile && sidebarCollapsed}
   <button class="sidebar-toggle-collapsed" on:click={() => { sidebarCollapsed = false; }} title="展开频道">💬</button>
   {/if}
 
@@ -689,14 +744,26 @@
     {#if currentChannelId}
       <div style="padding:12px 20px;border-bottom:1px solid rgba(0,229,255,0.1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <button
-            type="button"
-            class="sidebar-toggle-btn"
-            on:click={() => { sidebarCollapsed = !sidebarCollapsed; }}
-            title={sidebarCollapsed ? "展开频道" : "收起频道"}
-          >
-            {sidebarCollapsed ? '→' : '←'}
-          </button>
+          {#if isMobile}
+            <!-- 移动端 hamburger 按钮 -->
+            <button
+              type="button"
+              class="sidebar-toggle-btn"
+              on:click={toggleMobileSidebar}
+              title="打开频道列表"
+            >
+              ☰
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="sidebar-toggle-btn"
+              on:click={() => { sidebarCollapsed = !sidebarCollapsed; }}
+              title={sidebarCollapsed ? "展开频道" : "收起频道"}
+            >
+              {sidebarCollapsed ? '→' : '←'}
+            </button>
+          {/if}
           {#if currentChannelObj}
             <span style="font-size:18px;">{currentChannelObj.icon}</span>
             <span style="font-size:14px;font-weight:600;color:#e2e8f0;">{currentChannelObj.name}</span>
@@ -952,5 +1019,21 @@
       width: 100% !important;
       max-width: 280px;
     }
+  }
+
+  /* 移动端 sidebar：默认隐藏，作为全屏 overlay */
+  .wb-sidebar-mobile {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    height: 100% !important;
+    width: 280px !important;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .wb-sidebar-mobile.wb-sidebar-mobile-open {
+    transform: translateX(0);
   }
 </style>

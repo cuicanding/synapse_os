@@ -489,8 +489,6 @@ async def websocket_chat(ws: WebSocket):
     streaming_buffers: dict[str, str] = {}
     # runId -> {"agent": agent_id, "channel": channel_id} 用于正确路由回复
     run_to_info: dict[str, dict] = {}
-    done_sent: set[str] = set()  # agents that already received "done" this round
-    agent_streamed: set[str] = set()  # agents that received agent.assistant deltas (to skip duplicate chat.delta)
 
     def resolve_agent(payload: dict) -> str:
         """Determine which agent a Gateway event belongs to via runId, fallback to sessionKey."""
@@ -564,6 +562,10 @@ async def websocket_chat(ws: WebSocket):
 
         while True:
             # Drain gateway events (non-blocking)
+            # Simple logic: only process event=agent, ignore event=chat entirely
+            # agent.assistant → delta to frontend (typewriter)
+            # agent.thinking → thinking to frontend
+            # agent.lifecycle end → persist + done
             while True:
                 try:
                     data = msg_queue.get_nowait()
@@ -571,111 +573,60 @@ async def websocket_chat(ws: WebSocket):
                         await ws.close()
                         return
                     t = data.get("type")
-                    if t == "event":
-                        event = data.get("event", "")
-                        payload = data.get("payload", {})
-                        stream = payload.get("stream", "")
-                        agent_id = resolve_agent(payload)
+                    if t != "event":
+                        continue
 
-                        # Debug: log all agent.assistant and chat events
-                        if event == "agent" and stream in ("assistant", "lifecycle") or event == "chat":
-                            print(f"[ws:chat] GW event: event={event} stream={stream} agent={agent_id} runId={payload.get('runId','')[:12]} ch={resolve_channel(payload)} sessionKey={payload.get('sessionKey','')[:30]}")
+                    event = data.get("event", "")
+                    if event != "agent":
+                        continue  # skip all chat events, use sync button to catch up
 
-                        # Only process events from agents we manage (via runToInfo mapping)
-                        if not agent_id or agent_id not in AGENT_SESSION_KEYS:
-                            continue
+                    payload = data.get("payload", {})
+                    stream = payload.get("stream", "")
+                    agent_id = resolve_agent(payload)
 
-                        ch_id = resolve_channel(payload)
-                        if not ch_id:
-                            # Log unmapped events for debugging
-                            if stream in ("assistant", "thinking", "lifecycle") or event == "chat":
-                                print(f"[ws:chat] SKIP unmapped event: event={event} stream={stream} agent={agent_id} runId={payload.get('runId','')[:12]}")
-                            continue
+                    if not agent_id or agent_id not in AGENT_SESSION_KEYS:
+                        continue
 
-                        if event == "agent":
-                            if stream == "assistant":
-                                delta = payload.get("data", {}).get("delta", "")
-                                if delta and agent_id not in done_sent:
-                                    agent_streamed.add(agent_id)
-                                    streaming_buffers[agent_id] = streaming_buffers.get(agent_id, "") + delta
-                                    await ws.send_json({"type": "delta", "content": delta, "agent": agent_id, "channelId": ch_id})
-                            elif stream in ("thinking", "reasoner"):
-                                delta = payload.get("data", {}).get("delta", "") or payload.get("data", {}).get("text", "")
-                                if delta and agent_id not in done_sent:
-                                    await ws.send_json({"type": "thinking", "content": delta, "agent": agent_id, "channelId": ch_id})
-                            elif stream == "lifecycle":
-                                phase = payload.get("data", {}).get("phase", "")
-                                if phase == "end" and agent_id not in done_sent:
-                                    done_sent.add(agent_id)
-                                    buf = streaming_buffers.get(agent_id, "")
-                                    if buf:
-                                        # Already have streaming content, send final done
-                                        agent_streamed.discard(agent_id)
-                                        streaming_buffers.pop(agent_id, "")
-                                        # 持久化 Agent 回复到磁盘
-                                        profile = AGENT_DISPLAY_NAMES.get(agent_id, {})
-                                        add_message_to_channel(ch_id, agent_id, profile.get("name", agent_id), buf, "assistant")
-                                        await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
-                                    # else: defer done to chat.final which has the complete message
+                    ch_id = resolve_channel(payload)
+                    if not ch_id:
+                        continue
 
-                        elif event == "chat":
-                            chat_state = payload.get("state", "")
-                            if chat_state == "delta":
-                                # Skip if we already got content via agent.assistant stream (avoid duplicates)
-                                if agent_id not in done_sent and agent_id not in agent_streamed:
-                                    msg_data = payload.get("message", {})
-                                    content = msg_data.get("content", "")
-                                    text = extract_text(content)
-                                    if text:
-                                        streaming_buffers[agent_id] = streaming_buffers.get(agent_id, "") + text
-                                        await ws.send_json({"type": "delta", "content": text, "agent": agent_id, "channelId": ch_id})
-                            elif chat_state == "final":
-                                msg_data = payload.get("message", {})
-                                content = msg_data.get("content", "")
-                                text = extract_text(content)
+                    if stream == "assistant":
+                        delta = payload.get("data", {}).get("delta", "")
+                        if delta:
+                            streaming_buffers[agent_id] = streaming_buffers.get(agent_id, "") + delta
+                            await ws.send_json({"type": "delta", "content": delta, "agent": agent_id, "channelId": ch_id})
 
-                                if agent_id not in done_sent:
-                                    # Normal flow: no lifecycle/end seen yet
-                                    done_sent.add(agent_id)
-                                    buf = streaming_buffers.pop(agent_id, "")
-                                    # 确定最终文本
-                                    final_text = text
-                                    if not buf and text:
-                                        final_text = text
-                                    elif buf and text and text != buf:
-                                        final_text = text
-                                    elif buf:
-                                        final_text = buf
-                                    # 持久化 Agent 回复到磁盘
-                                    if final_text:
-                                        profile = AGENT_DISPLAY_NAMES.get(agent_id, {})
-                                        add_message_to_channel(ch_id, agent_id, profile.get("name", agent_id), final_text, "assistant")
-                                    if not buf and text:
-                                        # No streaming happened, send full text as single delta
-                                        await ws.send_json({"type": "delta", "content": text, "agent": agent_id, "channelId": ch_id})
-                                    # If buf has content, streaming already delivered it to client, just send done
-                                    await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
-                                else:
-                                    # lifecycle/end already handled this agent completely, skip to avoid duplicates
-                                    pass
-                                agent_streamed.discard(agent_id)
-                                streaming_buffers.pop(agent_id, "")
-                                run_id = payload.get("runId", "")
-                                run_to_info.pop(run_id, None)
-                            elif chat_state == "error":
-                                err = payload.get("error", {})
-                                err_text = err.get("message", "Unknown error") if isinstance(err, dict) else str(err)
-                                await ws.send_json({"type": "error", "content": err_text, "agent": agent_id, "channelId": ch_id})
-                                streaming_buffers.pop(agent_id, "")
-                                run_id = payload.get("runId", "")
-                                run_to_info.pop(run_id, None)
+                    elif stream in ("thinking", "reasoner"):
+                        delta = payload.get("data", {}).get("delta", "") or payload.get("data", {}).get("text", "")
+                        if delta:
+                            await ws.send_json({"type": "thinking", "content": delta, "agent": agent_id, "channelId": ch_id})
+
+                    elif stream == "lifecycle":
+                        phase = payload.get("data", {}).get("phase", "")
+                        if phase == "end":
+                            buf = streaming_buffers.pop(agent_id, "")
+                            if buf:
+                                profile = AGENT_DISPLAY_NAMES.get(agent_id, {})
+                                add_message_to_channel(ch_id, agent_id, profile.get("name", agent_id), buf, "assistant")
+                                await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
+
+                except ConnectionError:
+                    print("[ws:chat] WebSocket connection lost during event send, closing")
+                    return
                 except asyncio.QueueEmpty:
                     break
 
             try:
-                raw = await asyncio.wait_for(ws.receive_text(), timeout=1.0)
+                raw = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
                 msg = json.loads(raw)
             except asyncio.TimeoutError:
+                # Send ping to keep connection alive and detect dead clients
+                try:
+                    await ws.send_json({"type": "ping"})
+                except Exception:
+                    print("[ws:chat] Ping failed, connection dead")
+                    return
                 continue
             except WebSocketDisconnect:
                 break
@@ -773,8 +724,6 @@ async def websocket_chat(ws: WebSocket):
                             "key": key,
                         }, timeout=5)
 
-                        done_sent.discard(agent_id)
-                        agent_streamed.discard(agent_id)
                         idempotency_key = uuid.uuid4().hex
                         resp = await gw_request(gw_ws, msg_queue, "chat.send", {
                             "sessionKey": key,
@@ -812,8 +761,6 @@ async def websocket_chat(ws: WebSocket):
                     if sub_resp and sub_resp.get("ok"):
                         print(f"[ws:chat] Subscribed to messages for {agent_id} (key={key})")
 
-                    done_sent.discard(agent_id)
-                    agent_streamed.discard(agent_id)
                     idempotency_key = uuid.uuid4().hex
                     resp = await gw_request(gw_ws, msg_queue, "chat.send", {
                         "sessionKey": key,
