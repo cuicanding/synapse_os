@@ -11,7 +11,6 @@
     approveTask,
     rejectTask,
     acceptTask,
-    archiveTask,
     completeTask,
     abandonTask,
     type PhaseInfo,
@@ -117,40 +116,49 @@
     if (!content) return [];
     const artifacts: Artifact[] = [];
 
+    // Only scan within the ## 产出物 section to avoid matching paths in descriptions
+    let artifactContent = "";
+    const sectionMatch = content.match(/## 产出物\s*\n([\s\S]*?)(?=\n## |\n---\n|$)/);
+    if (sectionMatch) {
+      artifactContent = sectionMatch[1];
+    } else {
+      return [];
+    }
+
     // Pattern 1: - **name** (TYPE): `path.md` — time
     const p1 = /-\s*\*\*([^*]+)\*\*\s*\((\w+)\):\s*`([^`]+\.md)`\s*(?:—|-)\s*([^\n]+)/g;
     let m;
-    while ((m = p1.exec(content)) !== null) {
+    while ((m = p1.exec(artifactContent)) !== null) {
       artifacts.push({ name: m[1].trim(), type: m[2], path: m[3], time: m[4].trim() });
     }
 
     // Pattern 2: - **name**: `path.md`
     const p2 = /-\s*\*\*([^*]+)\*\*:\s*`([^`]+\.md)`/g;
-    while ((m = p2.exec(content)) !== null) {
+    while ((m = p2.exec(artifactContent)) !== null) {
       if (!artifacts.some(a => a.path === m[2])) {
         artifacts.push({ name: m[1].trim(), type: "DOC", path: m[2] });
       }
     }
 
-    // Pattern 3: Table row: | 产出 | `path.md` | 说明 | or list .md paths
+    // Pattern 3: Table row: | 产出 | `path.md` | 说明 |
     const p3 = /\|\s*产出\s*\|\s*`([^`]+\.md)`/g;
-    while ((m = p3.exec(content)) !== null) {
+    while ((m = p3.exec(artifactContent)) !== null) {
       if (!artifacts.some(a => a.path === m[1])) {
         artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] });
       }
     }
 
-    // Pattern 4: List item with .md path (catch-all)
+    // Pattern 4: List item with .md path
     const p4 = /[-*]\s*[^\n`]*`([^`]+\.md)`/g;
-    while ((m = p4.exec(content)) !== null) {
+    while ((m = p4.exec(artifactContent)) !== null) {
       if (!artifacts.some(a => a.path === m[1])) {
         artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] });
       }
     }
 
-    // Pattern 5: Fallback — any backtick-quoted .md path (e.g. "详见 `assets/xxx.md`")
+    // Pattern 5: Fallback — backtick-quoted .md path within 产出物 section
     const p5 = /`([^`]+\.md)`/g;
-    while ((m = p5.exec(content)) !== null) {
+    while ((m = p5.exec(artifactContent)) !== null) {
       if (!artifacts.some(a => a.path === m[1])) {
         artifacts.push({ name: m[1].split("/").pop() || m[1], type: "DOC", path: m[1] });
       }
@@ -215,19 +223,20 @@
     }
   }
 
-  async function handleArchive(taskId: string) {
-    try {
-      await archiveTask(taskId);
-    } catch (e) {
-      console.error("Archive failed:", e);
-    }
-  }
-
   async function handleAbandon(taskId: string) {
     try {
       await abandonTask(taskId);
     } catch (e) {
       console.error("Abandon failed:", e);
+    }
+  }
+
+  async function handleRequestRevision(taskId: string) {
+    try {
+      const resp = await fetch(`/api/tasks/${taskId}/request-revision`, { method: "PATCH" });
+      await resp.json();
+    } catch (e) {
+      console.error("Request revision failed:", e);
     }
   }
 
@@ -288,8 +297,14 @@
 
   // Sorting
   const statusOrder: Record<string, number> = {
-    "in-progress": 0, assigned: 1, pending: 2, completed: 3, accepted: 4,
-    "pending-approval": 5, "pending-acceptance": 6,
+    "pending-approval": 0,
+    "in-progress": 1,
+    "pending-acceptance": 2,
+    pending: 3,
+    assigned: 4,
+    completed: 5,
+    accepted: 6,
+    rejected: 7,
   };
   const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
@@ -318,24 +333,23 @@
 
   // Stats
   $: totalCount = $tasks.length;
-  $: pendingAcceptCount = $tasks.filter(t => t.status === "pending-acceptance" || t.status === "pending-approval").length;
+  $: pendingApprovalCount = $tasks.filter(t => t.status === "pending-approval").length;
+  $: pendingAcceptCount = $tasks.filter(t => t.status === "pending-acceptance").length;
   $: completedCount = $tasks.filter(t => t.status === "completed" || t.status === "accepted").length;
-  $: archivedCount = $tasks.filter(t => t.status === "archived").length;
-  $: otherCount = totalCount - pendingAcceptCount - completedCount - archivedCount;
+  $: rejectedCount = $tasks.filter(t => t.status === "rejected").length;
+  $: otherCount = totalCount - pendingApprovalCount - pendingAcceptCount - completedCount - rejectedCount;
 
   // Helpers
   const statusLabel: Record<string, string> = {
     pending: "待分配", assigned: "已分配", "in-progress": "进行中",
     completed: "已完成", accepted: "已验收", "pending-approval": "待审批",
-    "pending-acceptance": "待验收", rejected: "已驳回", discussing: "讨论中",
-    archived: "已归档",
+    "pending-acceptance": "待验收", rejected: "已驳回",
   };
   const statusClass: Record<string, string> = {
     pending: "status-pending", assigned: "status-in_progress",
     "in-progress": "status-in_progress", completed: "status-completed",
     accepted: "status-completed", "pending-approval": "status-pending",
     "pending-acceptance": "status-in_progress", rejected: "status-blocked",
-    discussing: "status-in_progress", archived: "status-pending",
   };
   const sourceLabel: Record<string, string> = { "real-business": "真实业务", "synapse-os": "SynapseOS 迭代" };
 
@@ -365,20 +379,20 @@
       <p class="text-xs text-txt-secondary font-mono">总任务</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
-      <p class="font-orbitron text-2xl font-bold neon-amber">{pendingAcceptCount}</p>
-      <p class="text-xs text-txt-secondary font-mono">待验收</p>
+      <p class="font-orbitron text-2xl font-bold text-cyber-amber">{pendingApprovalCount}</p>
+      <p class="text-xs text-txt-secondary font-mono">待审批</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
       <p class="font-orbitron text-2xl font-bold neon-green">{completedCount}</p>
       <p class="text-xs text-txt-secondary font-mono">已完成</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
-      <p class="font-orbitron text-2xl font-bold text-txt-secondary">{otherCount}</p>
-      <p class="text-xs text-txt-secondary font-mono">已归档</p>
+      <p class="font-orbitron text-2xl font-bold neon-amber">{pendingAcceptCount}</p>
+      <p class="text-xs text-txt-secondary font-mono">待验收</p>
     </div>
     <div class="glass-card p-4 space-y-1 text-center">
-      <p class="font-orbitron text-2xl font-bold text-cyber-red/60">{archivedCount}</p>
-      <p class="text-xs text-txt-secondary font-mono">已废弃</p>
+      <p class="font-orbitron text-2xl font-bold text-cyber-red/60">{rejectedCount}</p>
+      <p class="text-xs text-txt-secondary font-mono">已驳回</p>
     </div>
   </div>
 
@@ -479,11 +493,6 @@
                   <span class="status-badge {statusClass[task.status] || 'status-pending'} text-xs">
                     {statusLabel[task.status] || task.status}
                   </span>
-                  {#if task.decision_status === "pending"}
-                    <span class="status-badge status-blocked text-xs">待果爸决策</span>
-                  {:else if task.decision_status === "decided"}
-                    <span class="status-badge status-completed text-xs">已决策</span>
-                  {/if}
                   {#if task.source_type}
                     <span class="px-1.5 py-0.5 rounded text-xs bg-cyber-violet/10 border border-cyber-violet/20 text-cyber-violet/80">
                       {sourceLabel[task.source_type] || task.source_type}
@@ -584,39 +593,54 @@
 
               <!-- Action Buttons -->
               <div class="mt-4 pt-3 border-t border-white/5">
-                <div class="flex flex-wrap gap-2">
-                  {#if task.status !== 'archived' && task.status !== 'completed' && task.status !== 'accepted'}
+                {#if task.status === 'pending-approval'}
+                  <div class="flex flex-wrap gap-2">
                     <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
+                      class="px-4 py-2 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
+                      on:click|stopPropagation={() => handleApprove(task.id)}
+                    >✅ 批准</button>
+                    <button
+                      class="px-3 py-2 rounded text-xs font-mono bg-cyber-red/10 border border-cyber-red/20 text-cyber-red/70 hover:bg-cyber-red/20 transition-colors"
+                      on:click|stopPropagation={() => handleReject(task.id)}
+                    >❌ 驳回</button>
+                    <button
+                      class="px-3 py-2 rounded text-xs font-mono bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber/80 hover:bg-cyber-amber/20 transition-colors"
+                      on:click|stopPropagation={() => handleCommunicate(task)}
+                    >💬 沟通改进</button>
+                  </div>
+                {:else if task.status === 'in-progress'}
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      class="px-4 py-2 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
+                      on:click|stopPropagation={() => handleComplete(task.id)}
+                    >📋 提交验收</button>
+                    <button
+                      class="px-3 py-2 rounded text-xs font-mono bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber/80 hover:bg-cyber-amber/20 transition-colors"
+                      on:click|stopPropagation={() => handleCommunicate(task)}
+                    >💬 沟通改进</button>
+                  </div>
+                {:else if task.status === 'pending-acceptance'}
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      class="px-4 py-2 rounded text-xs font-mono bg-cyber-green/15 border border-cyber-green/30 text-cyber-green hover:bg-cyber-green/25 transition-colors"
                       on:click|stopPropagation={() => handleAccept(task.id)}
-                    >
-                      ✅ 提交成功
-                    </button>
-
+                    >✅ 验收通过</button>
                     <button
-                      class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-red/10 border border-cyber-red/20 text-cyber-red/70 hover:bg-cyber-red/20 transition-colors"
-                      on:click|stopPropagation={() => handleAbandon(task.id)}
-                    >
-                      🚫 废弃
-                    </button>
-                  {/if}
-
-                  <button
-                    class="px-3 py-1.5 rounded text-xs font-mono bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber/80 hover:bg-cyber-amber/20 transition-colors"
-                    on:click|stopPropagation={() => handleCommunicate(task)}
-                  >
-                    💬 沟通改进
-                  </button>
-                </div>
+                      class="px-3 py-2 rounded text-xs font-mono bg-cyber-red/10 border border-cyber-red/20 text-cyber-red/70 hover:bg-cyber-red/20 transition-colors"
+                      on:click|stopPropagation={() => handleRequestRevision(task.id)}
+                    >↩️ 退回修改</button>
+                    <button
+                      class="px-3 py-2 rounded text-xs font-mono bg-cyber-amber/10 border border-cyber-amber/20 text-cyber-amber/80 hover:bg-cyber-amber/20 transition-colors"
+                      on:click|stopPropagation={() => handleCommunicate(task)}
+                    >💬 沟通改进</button>
+                  </div>
+                {:else if task.status === 'completed' || task.status === 'rejected'}
+                  <!-- 终态，无操作按钮 -->
+                {/if}
               </div>
 
               <div class="flex items-center gap-4 text-xs font-mono text-txt-secondary">
-                {#if task.creator}
-                  <span>创建者: <span class="text-cyber-violet">{task.creator}</span></span>
-                {/if}
-                {#if task.assignee && task.assignee !== task.creator}
-                  <span>负责人: <span class="text-cyber-amber">{task.assignee}</span></span>
-                {/if}
+                <span>👤 负责人: <span class="text-cyber-amber">{task.assignee || task.creator || "—"}</span></span>
                 {#if task.mission_title}
                   <span>使命: <span class="text-cyber-cyan">{task.mission_title}</span></span>
                 {/if}

@@ -261,23 +261,37 @@ async def ensure_session(gw_ws, msg_queue, agent_id):
 
 
 async def _sync_session_to_jsonl(agent_id: str) -> int:
-    """从 agent session 文件读取消息，去重后追加到频道 JSONL。返回同步数量。"""
+    """从 agent session 文件读取消息（仅工作台 session），去重后追加到频道 JSONL。返回同步数量。"""
     channel_id = f"dm-{agent_id}"
-    session_dir = os.path.expanduser(f"~/.openclaw-can/agents/{agent_id}/sessions")
-    if not os.path.isdir(session_dir):
+    sessions_dir = os.path.expanduser(f"~/.openclaw-can/agents/{agent_id}/sessions")
+    if not os.path.isdir(sessions_dir):
         return 0
 
-    session_files = sorted(
-        [f for f in os.listdir(session_dir) if f.endswith(".jsonl")],
-        key=lambda f: os.path.getmtime(os.path.join(session_dir, f)),
-        reverse=True,
-    )
-    if not session_files:
+    # 只同步工作台的 session（agent:{agentId}:synapse），不污染频道
+    workbench_key = AGENT_SESSION_KEYS.get(agent_id, f"agent:{agent_id}:synapse")
+    target_file = None
+
+    # 从 sessions.json 查找工作台 session 对应的文件
+    sessions_json = os.path.join(sessions_dir, "sessions.json")
+    if os.path.isfile(sessions_json):
+        try:
+            import re as _re
+            with open(sessions_json, "r", encoding="utf-8") as f:
+                content = f.read()
+            escaped_key = _re.escape(workbench_key)
+            pattern = f'"{escaped_key}"' + r':\s*\{.*?"sessionFile":\s*"([^"]+)"'
+            m = _re.search(pattern, content, re.DOTALL)
+            if m:
+                target_file = m.group(1)
+        except Exception as e:
+            print(f"[ws:chat] Error reading sessions.json for {agent_id}: {e}")
+            sys.stdout.flush()
+
+    if not target_file or not os.path.isfile(target_file):
         return 0
 
     session_messages = []
-    latest_path = os.path.join(session_dir, session_files[0])
-    with open(latest_path, "r", encoding="utf-8") as f:
+    with open(target_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     for line in reversed(lines):
@@ -297,6 +311,9 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
         content = msg.get("content", "")
         text = _extract_session_text(content)
         if not text or text == "NO_REPLY":
+            continue
+        # Skip system metadata messages (not real user content)
+        if text.startswith("Sender (untrusted metadata)"):
             continue
         session_messages.append({
             "id": entry.get("id", ""),
@@ -350,6 +367,73 @@ async def sync_from_session(body: dict):
     return {"synced": synced, "channel_id": f"dm-{agent_id}"}
 
 
+def _format_tool_call(name: str, args) -> str:
+    """Format a tool call into a readable one-liner. Returns None if not useful."""
+    if not args or not isinstance(args, dict):
+        return None
+
+    name_map = {
+        "exec": "⚡",
+        "read": "📖",
+        "write": "📝",
+        "edit": "✏️",
+        "web_search": "🔍",
+        "web_fetch": "🌐",
+        "browser": "🖥️",
+        "image": "🖼️",
+        "message": "💬",
+    }
+
+    icon = name_map.get(name, "🔧")
+    name_display = name.replace("_", " ")
+
+    if name == "exec":
+        cmd = args.get("command", "")
+        if not cmd or len(cmd) < 3:
+            return None
+        # Show first 80 chars of command, strip paths
+        cmd_short = cmd[:80].replace("\n", " ")
+        # Abbreviate common long paths
+        import re as _re
+        cmd_short = _re.sub(r'/home/\w+/', '~/', cmd_short)
+        return f"{icon} {name_display}: `{cmd_short}`"
+    elif name == "read":
+        path = args.get("path", args.get("file_path", ""))
+        return f"{icon} {name_display}: {path}" if path else None
+    elif name == "write":
+        path = args.get("path", args.get("file_path", ""))
+        return f"{icon} {name_display}: {path}" if path else None
+    elif name == "edit":
+        path = args.get("path", args.get("file_path", ""))
+        return f"{icon} {name_display}: {path}" if path else None
+    elif name == "web_search":
+        query = args.get("query", "")
+        return f"{icon} 搜索: {query[:60]}" if query else None
+    elif name == "web_fetch":
+        url = args.get("url", "")
+        return f"{icon} 抓取: {url[:50]}" if url else None
+    elif name == "browser":
+        action = args.get("action", "")
+        url = args.get("url", "")
+        if url:
+            return f"{icon} {action}: {url[:40]}"
+        elif action:
+            return f"{icon} {action}"
+        return None
+    elif name == "message":
+        msg = args.get("message", "")
+        if msg and len(msg) > 3:
+            return f"{icon} 发送: {msg[:50]}"
+        return None
+    else:
+        # Generic: show first arg value
+        first_key = next(iter(args), None)
+        if first_key and first_key not in ("timeout", "timeoutMs", "maxChars", "limit", "offset"):
+            val = str(args[first_key])[:50]
+            return f"{icon} {name_display}: {val}"
+        return None
+
+
 def _extract_session_text(content) -> str:
     """Extract displayable text from session message content."""
     if isinstance(content, str):
@@ -367,7 +451,11 @@ def _extract_session_text(content) -> str:
                         texts.append(t)
                 elif ptype == "toolCall":
                     name = part.get("name", part.get("toolName", ""))
-                    texts.append(f"🔧 {name}")
+                    # Extract useful info from tool args
+                    args = part.get("args", part.get("input", part.get("parameters", {})))
+                    summary = _format_tool_call(name, args)
+                    if summary:
+                        texts.append(summary)
                 elif ptype == "toolResult":
                     continue
         return "\n".join(texts).strip()
@@ -405,16 +493,34 @@ async def websocket_chat(ws: WebSocket):
     agent_streamed: set[str] = set()  # agents that received agent.assistant deltas (to skip duplicate chat.delta)
 
     def resolve_agent(payload: dict) -> str:
-        """Determine which agent a Gateway event belongs to via runId."""
+        """Determine which agent a Gateway event belongs to via runId, fallback to sessionKey."""
         run_id = payload.get("runId", "")
         info = run_to_info.get(run_id, {})
-        return info.get("agent", "")
+        agent = info.get("agent", "")
+        if agent:
+            return agent
+        # Fallback: use sessionKey to find agent
+        session_key = payload.get("sessionKey", "")
+        if session_key:
+            for aid, key in session_keys.items():
+                if key == session_key:
+                    return aid
+        return ""
 
     def resolve_channel(payload: dict) -> str:
-        """Determine which channel a Gateway event belongs to via runId."""
+        """Determine which channel a Gateway event belongs to via runId, fallback to sessionKey."""
         run_id = payload.get("runId", "")
         info = run_to_info.get(run_id, {})
-        return info.get("channel", "")
+        channel = info.get("channel", "")
+        if channel:
+            return channel
+        # Fallback: use sessionKey to find channel
+        session_key = payload.get("sessionKey", "")
+        if session_key:
+            for aid, key in session_keys.items():
+                if key == session_key:
+                    return f"dm-{aid}"
+        return ""
 
     async def gateway_reader():
         try:
@@ -471,12 +577,19 @@ async def websocket_chat(ws: WebSocket):
                         stream = payload.get("stream", "")
                         agent_id = resolve_agent(payload)
 
+                        # Debug: log all agent.assistant and chat events
+                        if event == "agent" and stream in ("assistant", "lifecycle") or event == "chat":
+                            print(f"[ws:chat] GW event: event={event} stream={stream} agent={agent_id} runId={payload.get('runId','')[:12]} ch={resolve_channel(payload)} sessionKey={payload.get('sessionKey','')[:30]}")
+
                         # Only process events from agents we manage (via runToInfo mapping)
                         if not agent_id or agent_id not in AGENT_SESSION_KEYS:
                             continue
 
                         ch_id = resolve_channel(payload)
                         if not ch_id:
+                            # Log unmapped events for debugging
+                            if stream in ("assistant", "thinking", "lifecycle") or event == "chat":
+                                print(f"[ws:chat] SKIP unmapped event: event={event} stream={stream} agent={agent_id} runId={payload.get('runId','')[:12]}")
                             continue
 
                         if event == "agent":
@@ -655,6 +768,11 @@ async def websocket_chat(ws: WebSocket):
                             session_keys[agent_id] = key
                         key = session_keys[agent_id]
 
+                        # 确保已订阅该 session 的消息事件
+                        sub_resp = await gw_request(gw_ws, msg_queue, "sessions.messages.subscribe", {
+                            "key": key,
+                        }, timeout=5)
+
                         done_sent.discard(agent_id)
                         agent_streamed.discard(agent_id)
                         idempotency_key = uuid.uuid4().hex
@@ -687,6 +805,13 @@ async def websocket_chat(ws: WebSocket):
                         session_keys[agent_id] = key
                     key = session_keys[agent_id]
 
+                    # 确保已订阅该 session 的消息事件（agent.assistant delta 等）
+                    sub_resp = await gw_request(gw_ws, msg_queue, "sessions.messages.subscribe", {
+                        "key": key,
+                    }, timeout=5)
+                    if sub_resp and sub_resp.get("ok"):
+                        print(f"[ws:chat] Subscribed to messages for {agent_id} (key={key})")
+
                     done_sent.discard(agent_id)
                     agent_streamed.discard(agent_id)
                     idempotency_key = uuid.uuid4().hex
@@ -700,6 +825,7 @@ async def websocket_chat(ws: WebSocket):
                         if run_id:
                             run_to_info[run_id] = {"agent": agent_id, "channel": channel_id}
                         run_to_info[idempotency_key] = {"agent": agent_id, "channel": channel_id}
+                        print(f"[ws:chat] chat.send OK: runId={run_id[:12]} agent={agent_id} channel={channel_id}")
                         # 立即通知前端：Agent 已收到消息，正在思考
                         profile = AGENT_DISPLAY_NAMES.get(agent_id, {})
                         await ws.send_json({
@@ -708,6 +834,8 @@ async def websocket_chat(ws: WebSocket):
                             "agentName": profile.get("name", agent_id),
                             "channelId": channel_id,
                         })
+                    else:
+                        print(f"[ws:chat] chat.send FAILED: resp={resp}")
 
                     print(f"[ws:chat] → {channel_id}/{agent_id}: {content[:60]}")
                     sys.stdout.flush()

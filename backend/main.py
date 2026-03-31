@@ -253,6 +253,20 @@ async def api_today_activities(agent_id: str = None):
     return get_today_activities(agent_id=agent_id)
 
 
+@app.get("/api/daily-summary")
+async def api_daily_summary(agent_id: str = None):
+    """Return daily summary with tasks, collaborations, highlights."""
+    from activity_aggregator import get_daily_summary
+    return get_daily_summary(agent_id=agent_id)
+
+
+@app.get("/api/latest-previews")
+async def api_latest_previews():
+    """Lightweight: latest highlight per agent for card display."""
+    from activity_aggregator import get_latest_previews
+    return get_latest_previews()
+
+
 @app.get("/api/blockers")
 async def api_blockers():
     data = get_data()
@@ -466,11 +480,9 @@ def _get_current_task_status(task_id: str) -> str:
 
 # State transition validation table
 VALID_TRANSITIONS = {
-    "pending-approval": {"in-progress", "rejected", "discussing"},
+    "pending-approval": {"in-progress", "rejected"},
     "in-progress": {"pending-acceptance"},
     "pending-acceptance": {"completed", "in-progress"},
-    "completed": {"archived"},
-    "accepted": {"archived"},
 }
 
 
@@ -487,7 +499,6 @@ def _check_transition(task_id: str, new_status: str) -> tuple[bool, str]:
         "待验收": "pending-acceptance", "pending-acceptance": "pending-acceptance",
         "已驳回": "rejected", "rejected": "rejected",
         "已完成": "completed", "completed": "completed",
-        "讨论中": "discussing", "discussing": "discussing",
     }
     current_norm = status_map.get(current.lower().strip(), current.lower().strip())
     allowed = VALID_TRANSITIONS.get(current_norm, set())
@@ -650,56 +661,19 @@ async def api_task_reject(task_id: str, body: dict = None):
     }
 
 
-@app.post("/api/tasks/{task_id}/discuss")
-async def api_task_discuss(task_id: str, body: dict = None):
-    """Mark a pending-approval proposal as discussing."""
-    valid, err = _check_transition(task_id, "discussing")
-    if not valid:
-        return {"success": False, "error": err}, 400
-
-    from datetime import datetime, timezone
-
-    timestamp = datetime.now(timezone.utc).isoformat()
-    extra_content = f"## 讨论标记\n\n- **状态**: 讨论中\n- **时间**: {timestamp}\n"
-
-    success, filepath = _update_task_status_in_file(task_id, "discussing", extra_content)
-
-    if not success:
-        return {"success": False, "error": f"Task {task_id} not found"}
-
-    await on_data_changed()
-
-    return {
-        "success": True,
-        "task_id": task_id,
-        "new_status": "discussing",
-        "action": "discuss"
-    }
-
 
 @app.patch("/api/tasks/{task_id}/accept")
 async def api_task_accept(task_id: str, body: dict = None):
-    """Accept/complete a task -> completed. Allowed from any non-archived, non-completed status."""
-    current = _get_current_task_status(task_id)
-    if not current:
-        return {"success": False, "error": f"Task {task_id} not found or has no status"}, 404
-    if current in ("archived", "completed", "accepted"):
-        return {"success": False, "error": f"Task already {current}"}, 400
-
-    # Update status
+    """Accept/complete a task -> completed."""
+    valid, err = _check_transition(task_id, "completed")
+    if not valid:
+        return {"success": False, "error": err}, 400
     success, filepath = _update_task_status_in_file(task_id, "completed")
-
     if not success:
         return {"success": False, "error": f"Task {task_id} not found"}
-
+    _update_decision_field(task_id, "决策时间", datetime.now(timezone.utc).isoformat())
     await on_data_changed()
-
-    return {
-        "success": True,
-        "task_id": task_id,
-        "new_status": "completed",
-        "action": "accepted"
-    }
+    return {"success": True, "task_id": task_id, "new_status": "completed", "action": "accepted"}
 
 
 @app.patch("/api/tasks/{task_id}/request-revision")
@@ -854,18 +828,6 @@ async def api_task_complete(task_id: str, body: dict = None):
     await on_data_changed()
     return {"success": True, "task_id": task_id, "new_status": "pending-acceptance", "action": "completed"}
 
-
-@app.patch("/api/tasks/{task_id}/archive")
-async def api_task_archive(task_id: str, body: dict = None):
-    """Archive a completed/accepted task (successful completion)."""
-    valid, err = _check_transition(task_id, "archived")
-    if not valid:
-        return {"success": False, "error": err}, 400
-    success, filepath = _update_task_status_in_file(task_id, "archived")
-    if not success:
-        return {"success": False, "error": f"Task {task_id} not found"}
-    await on_data_changed()
-    return {"success": True, "task_id": task_id, "new_status": "archived"}
 
 
 @app.patch("/api/tasks/{task_id}/abandon")

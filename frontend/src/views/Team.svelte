@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { statusPanel, statusWsConnected, startStatusWs, stopStatusWs } from "../lib/status-ws";
-  import { fetchStatusPanel, fetchStatusHistory, type AgentStatus, type StatusPanel, type StatusReport } from "../lib/api";
+  import { fetchStatusPanel, type AgentStatus, type StatusPanel } from "../lib/api";
   import { showDifficultyModal, showHistorySidebar, statusDetailAgent } from "../lib/stores";
   import DifficultyModal from "./DifficultyModal.svelte";
   import StatusHistory from "./StatusHistory.svelte";
@@ -14,7 +14,6 @@
   // Today modal state
   let showTodayModal = false;
   let todayModalAgent: RoleSlotCard | null = null;
-  let todayRecords: StatusReport[] = [];
   let todayLoading = false;
 
   // Collaboration data
@@ -44,18 +43,18 @@
   }
   let agentAutoStatuses: Record<string, AgentAutoStatus> = {};
 
-  // Today activities from auto-aggregation API
-  interface TodayActivity {
+  // Daily summary from auto-aggregation API
+  interface DailySummary {
     agent_id: string;
     agent_name: string;
-    agent_emoji: string;
-    role: string;
-    type: string;
-    content: string;
-    timestamp: string;
-    relative_time: string;
+    emoji: string;
+    date: string;
+    tasks: { id: string; title: string }[];
+    collaborations: { direction: string; other_agent: string; task: string; time: string }[];
+    highlights: { time: string; content: string }[];
+    message_count: number;
   }
-  let todayActivities: TodayActivity[] = [];
+  let dailySummary: DailySummary | null = null;
 
   async function fetchCollaborations() {
     try {
@@ -69,31 +68,22 @@
     }
   }
 
-  // Latest activity per agent (for card preview)
-  let latestActivity: Record<string, TodayActivity | null> = {};
+  // Latest activity per agent (for card preview) - lightweight summary
+  let latestActivity: Record<string, { role: string; content: string; relative_time: string } | null> = {};
+
+  const AGENT_IDS = ["main", "susan", "reed", "zhouhuajian", "renxianqi", "aniu", "zhouxingchi"];
 
   async function fetchTodayPreview() {
     try {
-      const r = await fetch("/api/today-activities");
+      const r = await fetch("/api/latest-previews");
       if (r.ok) {
         const data = await r.json();
-        const map: Record<string, TodayActivity | null> = {};
-        for (const agent_id of AGENT_IDS) {
-          map[agent_id] = null;
-        }
-        for (const a of (data.activities || [])) {
-          if (!map[a.agent_id]) {
-            map[a.agent_id] = a;
-          }
-        }
-        latestActivity = map;
+        latestActivity = data.previews || {};
       }
     } catch (e) {
-      console.warn("[team] Failed to fetch today preview:", e);
+      // silent
     }
   }
-
-  const AGENT_IDS = ["main", "susan", "reed", "zhouhuajian", "renxianqi", "aniu", "zhouxingchi"];
 
   async function fetchAgentStatuses() {
     try {
@@ -413,16 +403,15 @@
     todayModalAgent = card;
     showTodayModal = true;
     todayLoading = true;
-    todayActivities = [];
+    dailySummary = null;
 
     try {
-      const r = await fetch(`/api/today-activities?agent_id=${card.agentId}`);
+      const r = await fetch(`/api/daily-summary?agent_id=${card.agentId}`);
       if (r.ok) {
-        const data = await r.json();
-        todayActivities = data.activities || [];
+        dailySummary = await r.json();
       }
     } catch (e) {
-      console.error("[team] Failed to fetch today activities:", e);
+      console.error("[team] Failed to fetch daily summary:", e);
     } finally {
       todayLoading = false;
     }
@@ -431,7 +420,6 @@
   function closeTodayModal() {
     showTodayModal = false;
     todayModalAgent = null;
-    todayRecords = [];
   }
 
   function formatTime(iso: string): string {
@@ -752,31 +740,66 @@
             <div class="animate-spin w-6 h-6 border-2 border-cyber-cyan/30 border-t-cyber-cyan rounded-full mx-auto mb-3"></div>
             <p class="text-sm text-txt-secondary">加载中...</p>
           </div>
-        {:else if todayActivities.length === 0}
+        {:else if !dailySummary}
           <div class="text-center py-8">
             <p class="text-3xl mb-3">📭</p>
             <p class="text-sm text-txt-secondary">今日暂无活动记录</p>
           </div>
         {:else}
-          <div class="space-y-2">
-            {#each todayActivities as activity}
-              <div class="flex gap-3 py-2 border-b border-white/5 last:border-0">
-                <div class="flex-shrink-0 mt-0.5">
-                  {#if activity.role === 'assistant'}
-                    <span class="text-cyber-cyan text-sm">💬</span>
-                  {:else}
-                    <span class="text-txt-secondary text-sm">📨</span>
-                  {/if}
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 mb-1">
-                    <span class="text-xs font-mono text-cyber-cyan/70">{activity.relative_time || formatTime(activity.timestamp)}</span>
-                    <span class="text-xs text-txt-secondary">{activity.role === 'assistant' ? '回复' : '收到'}</span>
-                  </div>
-                  <p class="text-sm text-txt-primary/90 line-clamp-3 font-chinese">{activity.content}</p>
+          <div class="space-y-4">
+
+            <!-- 参与任务 -->
+            {#if dailySummary.tasks.length > 0}
+              <div>
+                <h3 class="text-xs font-bold text-cyber-cyan uppercase tracking-wide mb-2">📌 参与任务 ({dailySummary.tasks.length})</h3>
+                <div class="space-y-1">
+                  {#each dailySummary.tasks as task}
+                    <div class="flex items-center gap-2 text-sm py-1 px-2 rounded bg-white/5">
+                      <span class="text-txt-secondary font-mono text-xs">{task.id}</span>
+                      <span class="text-txt-primary font-chinese truncate">{task.title}</span>
+                    </div>
+                  {/each}
                 </div>
               </div>
-            {/each}
+            {/if}
+
+            <!-- 协作记录 -->
+            {#if dailySummary.collaborations.length > 0}
+              <div>
+                <h3 class="text-xs font-bold text-cyber-violet uppercase tracking-wide mb-2">🤝 协作记录 ({dailySummary.collaborations.length})</h3>
+                <div class="space-y-1">
+                  {#each dailySummary.collaborations as collab}
+                    <div class="flex items-center gap-2 text-xs py-1.5 px-2 rounded bg-white/5">
+                      <span class="text-cyber-violet font-mono">{collab.direction}</span>
+                      <span class="text-txt-primary">{collab.other_agent}</span>
+                      <span class="text-txt-secondary/60 truncate flex-1">{collab.task}</span>
+                      <span class="text-txt-secondary/40 font-mono flex-shrink-0">{collab.time}</span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- 关键动态 -->
+            {#if dailySummary.highlights.length > 0}
+              <div>
+                <h3 class="text-xs font-bold text-amber-400 uppercase tracking-wide mb-2">💬 关键动态</h3>
+                <div class="space-y-1">
+                  {#each dailySummary.highlights as hl}
+                    <div class="flex gap-2 py-1.5 px-2">
+                      <span class="text-txt-secondary/50 font-mono text-xs flex-shrink-0 mt-0.5">{hl.time}</span>
+                      <p class="text-sm text-txt-primary/90 font-chinese line-clamp-2">{hl.content}</p>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- 统计 -->
+            <div class="flex items-center justify-between pt-2 border-t border-white/5 text-xs text-txt-secondary/50">
+              <span>消息总数: {dailySummary.message_count}</span>
+              <span>{dailySummary.date}</span>
+            </div>
           </div>
         {/if}
       </div>

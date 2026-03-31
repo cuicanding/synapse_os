@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { startWs, stopWs, synapseData, wsConnected, lastUpdated } from "./lib/ws";
+  import { startWs, stopWs, synapseData, wsConnected, lastUpdated, reconnect } from "./lib/ws";
+  import { reconnect as reconnectStatusWs } from "./lib/status-ws";
   import { mission, tasks, decisions, team, missions, loading, showWorkbench, pendingDecisions } from "./lib/stores";
   import Mission from "./views/Mission.svelte";
   import Tasks from "./views/Tasks.svelte";
@@ -167,6 +168,11 @@
     if (!iso) return "—";
     return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
+
+  function handleReconnect() {
+    reconnect();
+    reconnectStatusWs();
+  }
 </script>
 
 {#if !authChecked}
@@ -219,6 +225,12 @@
           <div class="flex items-center gap-1.5">
             <span class="w-2 h-2 rounded-full {$wsConnected ? 'bg-cyber-green pulse-glow' : 'bg-cyber-red'}"></span>
             <span class="text-txt-secondary">{$wsConnected ? "LIVE" : "OFFLINE"}</span>
+            {#if !$wsConnected}
+              <button
+                class="text-cyber-blue hover:underline cursor-pointer ml-1"
+                on:click={handleReconnect}
+              >↻</button>
+            {/if}
           </div>
           {#if $lastUpdated}
             <span class="text-txt-secondary">↑ {formatTime($lastUpdated)}</span>

@@ -128,9 +128,10 @@ def _parse_table(content: str) -> list[dict]:
 
 
 def _parse_field(field_name: str, content: str) -> str:
-    """Extract a bold-field value from markdown, e.g. '- **状态**: in-progress'."""
+    """Extract a bold-field value from markdown, e.g. '- **状态**: in-progress' or '**状态**: in-progress'."""
     for line in content.split("\n"):
-        m = re.match(rf"^\s*-\s+\*\*{re.escape(field_name)}\*\*:\s*(.+)", line)
+        # 匹配 - **字段**: 值 或 **字段**: 值
+        m = re.match(rf"^\s*(?:-\s+)?\*\*{re.escape(field_name)}\*\*:\s*(.+)", line)
         if m:
             return _strip(m.group(1))
     return ""
@@ -271,19 +272,7 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
                 title = _strip(m.group(1)) if m else raw
                 break
 
-    status = _parse_field("状态", content) or fm.get("状态", "pending")
-    # Normalize status
-    status_map = {
-        "pending": "pending", "进行中": "in-progress", "in-progress": "in-progress",
-        "completed": "completed", "assigned": "assigned", "accepted": "accepted",
-        "待审批": "pending-approval", "pending-approval": "pending-approval",
-        "待验收": "pending-acceptance", "pending-acceptance": "pending-acceptance",
-        "已驳回": "rejected", "rejected": "rejected",
-        "discussing": "discussing", "讨论中": "discussing",
-    }
-    status = status_map.get(status.lower().strip().strip("`"), status.lower().strip().strip("`"))
-
-    # Parse all ## / ### sections (used by multiple blocks below)
+    # Parse all ## / ### sections first (needed for status parsing)
     sections = {}
     current_section = ""
     current_lines = []
@@ -298,8 +287,25 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
     if current_lines:
         sections[current_section] = "\n".join(current_lines).strip()
 
+    # Status: 限定在 任务执行 section 内解析（兼容 任务信息 / 基本信息 section）
+    exec_section = sections.get("任务执行", "") or sections.get("任务信息", "") or sections.get("基本信息", "")
+    status = _parse_field("状态", exec_section) or fm.get("状态", "pending")
+    # Normalize status
+    status_map = {
+        "pending": "pending", "进行中": "in-progress", "in-progress": "in-progress",
+        "completed": "completed", "assigned": "assigned", "accepted": "accepted",
+        "待审批": "pending-approval", "pending-approval": "pending-approval",
+        "待验收": "pending-acceptance", "pending-acceptance": "pending-acceptance",
+        "已驳回": "rejected", "rejected": "rejected",
+        "discussing": "discussing", "讨论中": "discussing",
+    }
+    status = status_map.get(status.lower().strip().strip("`"), status.lower().strip().strip("`"))
+
+    # sections dict already parsed above, used by multiple blocks below
+
     mission_id = _parse_field("使命ID", content) or fm.get("使命ID", "")
-    # If mission_id contains parenthetical note, clean it
+    # Clean up markdown backticks and parenthetical notes
+    mission_id = mission_id.strip().strip("`")
     mission_id = re.sub(r"[（(].+[)）]", "", mission_id).strip()
 
     # Iteration fields (driven by mission's #1 person)
@@ -365,40 +371,57 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
                 source_of_truth = _strip(m.group(1))
                 break
 
-    # Source type
+    # Source type — from 任务来源 section, skip header and delimiter rows
     source_type = ""
-    for line in content.split("\n"):
-        m = re.match(r"\|\s*来源类型\s*\|\s*`?([^`|]+)`?\s*\|", line)
-        if m:
-            source_type = _strip(m.group(1))
-            break
+    source_section = sections.get("任务来源", "")
+    if source_section:
+        for line in source_section.split("\n"):
+            # Skip header row (| 来源类型 | 说明 |) and delimiter (|---|)
+            if re.match(r"\|\s*-+", line) or re.match(r"\|\s*来源类型", line):
+                continue
+            # Match data row with backtick value: | `synapse-os` | ... |
+            m = re.match(r"\|\s*`([^`]+)`\s*\|", line)
+            if m:
+                source_type = _strip(m.group(1))
+                break
 
-    # Creator
-    creator = ""
-    for line in content.split("\n"):
-        m = re.match(r"\s*[-*]\s*\*\*创建者\*\*:\s*(.+)", line)
-        if not m:
-            m = re.match(r"\*\*创建者\*\*:\s*(.+)", line)
-        if m:
-            creator = _strip(m.group(1))
-            break
-        m = re.match(r"\s*[-*]\s*\*\*创建人/负责人\*\*:\s*(.+)", line)
-        if not m:
-            m = re.match(r"\*\*创建人/负责人\*\*:\s*(.+)", line)
-        if m:
-            raw = _strip(m.group(1))
-            # Extract name before parentheses, e.g. "周华健（策略分析师）" → "周华健"
-            cm = re.match(r"([^（(]+)", raw)
-            creator = _strip(cm.group(1)) if cm else raw
-            break
-        m = re.match(r"\s*[-*]\s*\*\*创建人\*\*:\s*(.+)", line)
-        if not m:
-            m = re.match(r"\*\*创建人\*\*:\s*(.+)", line)
-        if m:
-            raw = _strip(m.group(1))
-            cm = re.match(r"([^（(]+)", raw)
-            creator = _strip(cm.group(1)) if cm else raw
-            break
+    # Creator: 优先从 基本信息 section 读取（兼容老格式 任务信息 section）
+    # basic_info 已在上面 assignee 部分定义，但这里确保顺序安全先获取
+    basic_info = sections.get("基本信息", content) or sections.get("任务信息", content)
+    creator = _parse_field("创建者", basic_info)
+    if not creator:
+        creator = _parse_field("创建人/负责人", basic_info)
+    if not creator:
+        creator = _parse_field("创建人", basic_info)
+    # Clean creator name (extract name before parentheses)
+    if creator:
+        cm = re.match(r"([^（(]+)", creator)
+        creator = _strip(cm.group(1)) if cm else creator
+    # fallback: 全文搜索（保留兼容性）
+    if not creator:
+        for line in content.split("\n"):
+            m = re.match(r"\s*[-*]\s*\*\*创建者\*\*:\s*(.+)", line)
+            if not m:
+                m = re.match(r"\*\*创建者\*\*:\s*(.+)", line)
+            if m:
+                creator = _strip(m.group(1))
+                break
+            m = re.match(r"\s*[-*]\s*\*\*创建人/负责人\*\*:\s*(.+)", line)
+            if not m:
+                m = re.match(r"\*\*创建人/负责人\*\*:\s*(.+)", line)
+            if m:
+                raw = _strip(m.group(1))
+                cm = re.match(r"([^（(]+)", raw)
+                creator = _strip(cm.group(1)) if cm else raw
+                break
+            m = re.match(r"\s*[-*]\s*\*\*创建人\*\*:\s*(.+)", line)
+            if not m:
+                m = re.match(r"\*\*创建人\*\*:\s*(.+)", line)
+            if m:
+                raw = _strip(m.group(1))
+                cm = re.match(r"([^（(]+)", raw)
+                creator = _strip(cm.group(1)) if cm else raw
+                break
 
     # Updated at
     updated_at = _parse_field("更新时间", content) or fm.get("更新时间", "")
@@ -430,23 +453,12 @@ def parse_task(filepath: Path, mission_map: dict) -> Task:
     if not updated_at:
         updated_at = created_at_val
 
-    # Assignee from 执行者 section
-    assignee = ""
-    exec_section = sections.get("任务执行", "")
-    for line in exec_section.split("\n"):
-        m = re.match(r"-\s*架构师:\s*(.+)", line)
-        if m:
-            a = _strip(m.group(1))
-            if a and "待" not in a:
-                assignee = a
-        m = re.match(r"-\s*开发者:\s*(.+)", line)
-        if m:
-            a = _strip(m.group(1))
-            if a and "待" not in a:
-                if assignee:
-                    assignee = f"{assignee} + {a}"
-                else:
-                    assignee = a
+    # Assignee: 优先从 基本信息 section 的 执行者 字段读取，兼容老格式 任务信息 section
+    basic_info = sections.get("基本信息", "") or sections.get("任务信息", "")
+    assignee = _parse_field("执行者", basic_info)
+    if not assignee:
+        # fallback: 从创建者获取
+        assignee = creator or "待分配"
 
     mission_title = mission_map.get(mission_id, {}).get("title", "") if mission_id else ""
 

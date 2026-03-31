@@ -87,3 +87,14 @@ export function stopStatusWs(): void {
   ws?.close();
   ws = null;
 }
+
+export function reconnect(): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  ws?.close();
+  ws = null;
+  reconnectDelay = 1000;
+  connect();
+}
