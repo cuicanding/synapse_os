@@ -306,8 +306,8 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
             continue
         msg = entry.get("message", {})
         role = msg.get("role", "")
-        if role not in ("user", "assistant"):
-            continue
+        if role != "user":
+            continue  # Only sync user messages; assistant is persisted by lifecycle end
         content = msg.get("content", "")
         text = _extract_session_text(content)
         if not text or text == "NO_REPLY":
@@ -593,6 +593,10 @@ async def websocket_chat(ws: WebSocket):
 
                     if stream == "assistant":
                         delta = payload.get("data", {}).get("delta", "")
+                        if delta and len(delta.strip()) > 0:
+                            # Only log first delta of each agent to avoid spam
+                            if agent_id not in streaming_buffers or not streaming_buffers[agent_id]:
+                                print(f"[ws:chat] delta start: agent={agent_id} ch={ch_id}")
                         if delta:
                             streaming_buffers[agent_id] = streaming_buffers.get(agent_id, "") + delta
                             await ws.send_json({"type": "delta", "content": delta, "agent": agent_id, "channelId": ch_id})
