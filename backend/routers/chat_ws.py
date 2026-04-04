@@ -274,7 +274,7 @@ def _load_history_from_disk(channel_id: str, limit: int = 50) -> list[dict]:
                 try:
                     msg = json.loads(line)
                     # 按内容签名去重（优先）+ id 去重
-                    sig = (msg.get("senderId", ""), msg.get("role", ""), (msg.get("content", "") or "")[:80])
+                    sig = (msg.get("senderId", ""), msg.get("role", ""), (msg.get("content", "") or "")[:120])
                     mid = msg.get("id", "")
                     if sig in seen:
                         continue
@@ -420,7 +420,7 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
     safe_id = channel_id.replace("/", "_").replace("\\", "_")
     jsonl_path = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.jsonl")
     existing_ids = set()
-    existing_signatures = set()  # (senderId, role, content[:50]) 用于内容去重
+    existing_signatures = set()  # (senderId, role, content[:120]) 用于内容去重
     if os.path.isfile(jsonl_path):
         with open(jsonl_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -429,7 +429,7 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
                     try:
                         entry = json.loads(line)
                         existing_ids.add(entry.get("id", ""))
-                        sig = (entry.get("senderId", ""), entry.get("role", ""), entry.get("content", "")[:50])
+                        sig = (entry.get("senderId", ""), entry.get("role", ""), entry.get("content", "")[:120])
                         existing_signatures.add(sig)
                     except json.JSONDecodeError:
                         continue
@@ -439,7 +439,7 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
         with open(jsonl_path, "a", encoding="utf-8") as f:
             for m in session_messages:
                 if m["id"] and m["id"] not in existing_ids:
-                    sig = (m.get("senderId", ""), m.get("role", ""), m.get("content", "")[:50])
+                    sig = (m.get("senderId", ""), m.get("role", ""), m.get("content", "")[:120])
                     if sig not in existing_signatures:
                         f.write(json.dumps(m, ensure_ascii=False, default=str) + "\n")
                         existing_ids.add(m["id"])
