@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -158,9 +159,88 @@ def _persist_message(channel_id: str, message: dict):
         sys.stdout.flush()
 
 
+def _persist_streaming_chunk(channel_id: str, agent_id: str, content: str):
+    """将 streaming 中的内容增量写入临时文件，用于断线恢复。
+    
+    文件命名: {channel_id}.streaming.{agent_id}.jsonl
+    每次调用覆盖写入（因为是追加 buffer，不是追加行）。
+    """
+    try:
+        safe_id = channel_id.replace("/", "_").replace("\\", "_")
+        filepath = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.streaming.{agent_id}.jsonl")
+        message = {
+            "id": f"streaming-{agent_id}",
+            "senderId": agent_id,
+            "senderName": AGENT_DISPLAY_NAMES.get(agent_id, {}).get("name", agent_id),
+            "content": content,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "role": "assistant",
+            "streaming": True,
+        }
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(json.dumps(message, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[ws:chat] Failed to persist streaming chunk: {e}")
+        sys.stdout.flush()
+
+
+def _clear_streaming_file(channel_id: str, agent_id: str):
+    """删除 streaming 临时文件（lifecycle end 时调用）。"""
+    try:
+        safe_id = channel_id.replace("/", "_").replace("\\", "_")
+        filepath = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.streaming.{agent_id}.jsonl")
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except Exception:
+        pass
+
+
+def _load_streaming_files(channel_id: str) -> list:
+    """加载频道所有 streaming 临时文件，返回消息列表。"""
+    results = []
+    try:
+        safe_id = channel_id.replace("/", "_").replace("\\", "_")
+        directory = CHAT_HISTORY_DIR
+        prefix = f"{safe_id}.streaming."
+        if os.path.isdir(directory):
+            for filename in os.listdir(directory):
+                if filename.startswith(prefix) and filename.endswith(".jsonl"):
+                    filepath = os.path.join(directory, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if line:
+                                    results.append(json.loads(line))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return results
+
+
 def get_channel_history(channel_id: str, limit: int = 50) -> list[dict]:
     """获取频道历史消息（纯磁盘读取）。"""
-    return _load_history_from_disk(channel_id, limit=limit)
+    messages = _load_history_from_disk(channel_id, limit=limit)
+    
+    # 合并 streaming 临时文件（断线恢复）
+    streaming_msgs = _load_streaming_files(channel_id)
+    if streaming_msgs:
+        # 移除历史中同 agent 的最后一条 assistant 消息（如果它是 streaming 状态）
+        for sm in streaming_msgs:
+            aid = sm.get("senderId", "")
+            # 找历史中该 agent 的最后一条 assistant 消息
+            last_idx = None
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "assistant" and messages[i].get("senderId") == aid:
+                    last_idx = i
+                    break
+            if last_idx is not None:
+                messages[last_idx] = sm  # 用 streaming 快照替换
+            else:
+                messages.append(sm)  # 追加
+    
+    return messages
 
 
 def extract_text(content):
@@ -177,7 +257,7 @@ def extract_text(content):
 
 
 def _load_history_from_disk(channel_id: str, limit: int = 50) -> list[dict]:
-    """从频道的 JSONL 持久化文件加载历史消息。"""
+    """从频道的 JSONL 持久化文件加载历史消息，按内容去重。"""
     try:
         safe_id = channel_id.replace("/", "_").replace("\\", "_")
         filepath = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.jsonl")
@@ -185,6 +265,7 @@ def _load_history_from_disk(channel_id: str, limit: int = 50) -> list[dict]:
             return []
 
         messages = []
+        seen = set()
         with open(filepath, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -192,6 +273,12 @@ def _load_history_from_disk(channel_id: str, limit: int = 50) -> list[dict]:
                     continue
                 try:
                     msg = json.loads(line)
+                    # 按内容签名去重（优先）+ id 去重
+                    sig = (msg.get("senderId", ""), msg.get("role", ""), (msg.get("content", "") or "")[:80])
+                    mid = msg.get("id", "")
+                    if sig in seen:
+                        continue
+                    seen.add(sig)
                     messages.append(msg)
                 except json.JSONDecodeError:
                     continue
@@ -306,12 +393,14 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
             continue
         msg = entry.get("message", {})
         role = msg.get("role", "")
-        if role != "user":
-            continue  # Only sync user messages; assistant is persisted by lifecycle end
+        if role not in ("user", "assistant"):
+            continue
         content = msg.get("content", "")
         text = _extract_session_text(content)
         if not text or text == "NO_REPLY":
             continue
+        # Fix broken UTF-8 surrogates
+        text = text.encode('utf-8', errors='replace').decode('utf-8')
         # Skip system metadata messages (not real user content)
         if text.startswith("Sender (untrusted metadata)"):
             continue
@@ -331,13 +420,17 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
     safe_id = channel_id.replace("/", "_").replace("\\", "_")
     jsonl_path = os.path.join(CHAT_HISTORY_DIR, f"{safe_id}.jsonl")
     existing_ids = set()
+    existing_signatures = set()  # (senderId, role, content[:50]) 用于内容去重
     if os.path.isfile(jsonl_path):
         with open(jsonl_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
                     try:
-                        existing_ids.add(json.loads(line).get("id", ""))
+                        entry = json.loads(line)
+                        existing_ids.add(entry.get("id", ""))
+                        sig = (entry.get("senderId", ""), entry.get("role", ""), entry.get("content", "")[:50])
+                        existing_signatures.add(sig)
                     except json.JSONDecodeError:
                         continue
 
@@ -346,9 +439,12 @@ async def _sync_session_to_jsonl(agent_id: str) -> int:
         with open(jsonl_path, "a", encoding="utf-8") as f:
             for m in session_messages:
                 if m["id"] and m["id"] not in existing_ids:
-                    f.write(json.dumps(m, ensure_ascii=False) + "\n")
-                    existing_ids.add(m["id"])
-                    synced += 1
+                    sig = (m.get("senderId", ""), m.get("role", ""), m.get("content", "")[:50])
+                    if sig not in existing_signatures:
+                        f.write(json.dumps(m, ensure_ascii=False, default=str) + "\n")
+                        existing_ids.add(m["id"])
+                        existing_signatures.add(sig)
+                        synced += 1
 
     if synced > 0:
         print(f"[ws:chat] Synced {synced} messages from session to {channel_id} JSONL")
@@ -489,6 +585,8 @@ async def websocket_chat(ws: WebSocket):
     streaming_buffers: dict[str, str] = {}
     # runId -> {"agent": agent_id, "channel": channel_id} 用于正确路由回复
     run_to_info: dict[str, dict] = {}
+    # 上次持久化时间（用于增量持久化，每2秒一次）
+    _last_streaming_persist: dict[str, float] = {}
 
     def resolve_agent(payload: dict) -> str:
         """Determine which agent a Gateway event belongs to via runId, fallback to sessionKey."""
@@ -521,6 +619,7 @@ async def websocket_chat(ws: WebSocket):
         return ""
 
     async def gateway_reader():
+        nonlocal gw_ws, reader_task
         try:
             async for raw in gw_ws:
                 data = json.loads(raw)
@@ -533,6 +632,23 @@ async def websocket_chat(ws: WebSocket):
             print(f"[ws:chat] Reader error: {e}")
         finally:
             await msg_queue.put(None)
+            # Auto-reconnect Gateway
+        print("[ws:chat] Gateway disconnected, reconnecting in 2s...")
+        sys.stdout.flush()
+        await asyncio.sleep(2)
+        for attempt in range(5):
+            try:
+                gw_ws = await gateway_connect()
+                reader_task = asyncio.create_task(gateway_reader())
+                print(f"[ws:chat] Gateway reconnected (attempt {attempt+1})")
+                sys.stdout.flush()
+                return
+            except Exception as e:
+                print(f"[ws:chat] Reconnect attempt {attempt+1} failed: {e}")
+                sys.stdout.flush()
+                await asyncio.sleep(2 * (attempt + 1))
+        print("[ws:chat] Gateway reconnect failed after 5 attempts")
+        sys.stdout.flush()
 
     try:
         gw_ws = await gateway_connect()
@@ -570,8 +686,7 @@ async def websocket_chat(ws: WebSocket):
                 try:
                     data = msg_queue.get_nowait()
                     if data is None:
-                        await ws.close()
-                        return
+                        break  # Gateway reader exited, loop will check reconnect status
                     t = data.get("type")
                     if t != "event":
                         continue
@@ -599,6 +714,11 @@ async def websocket_chat(ws: WebSocket):
                                 print(f"[ws:chat] delta start: agent={agent_id} ch={ch_id}")
                         if delta:
                             streaming_buffers[agent_id] = streaming_buffers.get(agent_id, "") + delta
+                            # 增量持久化（每2秒一次）
+                            now = time.time()
+                            if now - _last_streaming_persist.get(agent_id, 0) >= 2:
+                                _persist_streaming_chunk(ch_id, agent_id, streaming_buffers[agent_id])
+                                _last_streaming_persist[agent_id] = now
                             await ws.send_json({"type": "delta", "content": delta, "agent": agent_id, "channelId": ch_id})
 
                     elif stream in ("thinking", "reasoner"):
@@ -613,6 +733,8 @@ async def websocket_chat(ws: WebSocket):
                             if buf:
                                 profile = AGENT_DISPLAY_NAMES.get(agent_id, {})
                                 add_message_to_channel(ch_id, agent_id, profile.get("name", agent_id), buf, "assistant")
+                                _clear_streaming_file(ch_id, agent_id)
+                                _last_streaming_persist.pop(agent_id, None)
                                 await ws.send_json({"type": "done", "agent": agent_id, "channelId": ch_id})
 
                 except ConnectionError:
@@ -796,6 +918,15 @@ async def websocket_chat(ws: WebSocket):
         import traceback
         traceback.print_exc()
     finally:
+        # 清理所有 streaming 临时文件
+        try:
+            for filename in os.listdir(CHAT_HISTORY_DIR):
+                if ".streaming." in filename and filename.endswith(".jsonl"):
+                    os.remove(os.path.join(CHAT_HISTORY_DIR, filename))
+        except Exception:
+            pass
+        streaming_buffers.clear()
+        _last_streaming_persist.clear()
         if reader_task:
             reader_task.cancel()
         if gw_ws:

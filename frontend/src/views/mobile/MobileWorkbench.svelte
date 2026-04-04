@@ -339,15 +339,28 @@
   // ─── Markdown mini renderer ───────────────────────────────────────────
   function parseMarkdown(text: string): string {
     if (!text) return "";
+    // Process tables first (before \n → <br/>)
+    text = text.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm, function(match, header, sep, body) {
+      var headers = header.split('|').filter(c => c.trim()).map(c => '<th style="padding:6px 10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);font-weight:600;text-align:left;font-size:12px;white-space:nowrap;">' + c.trim() + '</th>').join('');
+      var rows = body.trim().split('\n').map(function(row) {
+        var cells = row.split('|').filter(c => c.trim()).map(c => '<td style="padding:5px 10px;border:1px solid rgba(255,255,255,0.08);font-size:12px;">' + c.trim() + '</td>').join('');
+        return '<tr>' + cells + '</tr>';
+      }).join('');
+      return '<table style="border-collapse:collapse;margin:8px 0;width:100%;max-width:100%;overflow-x:auto;display:block;">' +
+        '<thead>' + headers + '</thead><tbody>' + rows + '</tbody></table>';
+    });
     return text
-      .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.4);padding:8px;border-radius:6px;overflow-x:auto;margin:6px 0;font-size:12px;"><code>$2</code></pre>')
+      .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.4);padding:10px;border-radius:6px;overflow-x:auto;margin:8px 0;font-size:12px;"><code>$2</code></pre>')
       .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff;">$1</strong>')
-      .replace(/`(.+?)`/g, '<code style="background:rgba(0,0,0,0.3);padding:1px 4px;border-radius:3px;font-size:12px;">$1</code>')
-      .replace(/^### (.+)$/gm, '<div style="font-size:14px;font-weight:700;color:#fff;margin:10px 0 4px;">$1</div>')
-      .replace(/^## (.+)$/gm, '<div style="font-size:15px;font-weight:700;color:#fff;margin:12px 0 6px;">$1</div>')
-      .replace(/^# (.+)$/gm, '<div style="font-size:16px;font-weight:700;color:#fff;margin:14px 0 6px;">$1</div>')
-      .replace(/^- (.+)$/gm, '<div style="padding-left:10px;margin:2px 0;">• $1</div>')
-      .replace(/\n/g, "<br/>");
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`(.+?)`/g, '<code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:12px;">$1</code>')
+      .replace(/^#### (.+)$/gm, '<div style="font-size:14px;font-weight:700;color:#ccc;margin:10px 0 4px;">$1</div>')
+      .replace(/^### (.+)$/gm, '<div style="font-size:15px;font-weight:700;color:#fff;margin:12px 0 6px;">$1</div>')
+      .replace(/^## (.+)$/gm, '<div style="font-size:16px;font-weight:700;color:#fff;margin:14px 0 8px;">$1</div>')
+      .replace(/^# (.+)$/gm, '<div style="font-size:17px;font-weight:700;color:#fff;margin:16px 0 8px;">$1</div>')
+      .replace(/^- (.+)$/gm, '<div style="padding-left:12px;margin:2px 0;">• $1</div>')
+      .replace(/^\d+\. (.+)$/gm, '<div style="padding-left:12px;margin:2px 0;">$1</div>')
+      .replace(/\n/g, '<br/>');
   }
 
   async function syncFromSession() {
@@ -402,15 +415,38 @@
     return text.slice(0, 30) + (text.length > 30 ? "…" : "");
   }
 
+  // ─── Activity Pulse（实时动作指示器，30s 轮询）────────────────────────
+  interface ActivityPulseEntry {
+    action: string;
+    elapsed_seconds: number;
+  }
+  let activityPulses: Record<string, ActivityPulseEntry | null> = {};
+  let pulseTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function fetchActivityPulse() {
+    try {
+      const r = await fetch("/api/activity-pulse");
+      if (r.ok) {
+        const data = await r.json();
+        activityPulses = data.pulses || {};
+      }
+    } catch (e) {
+      // silent
+    }
+  }
+
   // ─── Lifecycle ───────────────────────────────────────────────────────
   onMount(() => {
     connectWs();
+    fetchActivityPulse();
+    pulseTimer = setInterval(fetchActivityPulse, 30000);
     return () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   });
   onDestroy(() => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (pulseTimer) clearInterval(pulseTimer);
   });
 </script>
 
@@ -449,11 +485,20 @@
         {:else}
           {#each Object.entries(AGENT_PROFILES) as [agentId, profile]}
             {@const dmId = `dm-${agentId}`}
+            {@const pulse = activityPulses[agentId] || null}
+            {@const isStaleAction = pulse ? pulse.elapsed_seconds > 600 : false}
             <button class="ch-item" on:click={() => joinChannel(dmId)}>
               <span class="ch-icon">{profile.emoji}</span>
               <div class="ch-info">
                 <div class="ch-name">{profile.name}</div>
-                <div class="ch-preview ch-role">{profile.role}</div>
+                {#if pulse?.action}
+                  <div class="ch-preview ch-pulse" class:ch-pulse-stale={isStaleAction}>
+                    <span class="pulse-dot" class:pulse-dot-stale={isStaleAction}></span>
+                    {pulse.action}
+                  </div>
+                {:else}
+                  <div class="ch-preview ch-role">{profile.role}</div>
+                {/if}
               </div>
             </button>
           {/each}
@@ -548,7 +593,7 @@
           on:input={(e) => { chatMessageRaw = e.target.value; }}
           on:keydown={handleInputKeydown}
           placeholder="发送消息... (Ctrl+Enter 发送)"
-          rows={3}
+          rows={2}
           class="msg-input"
           style="font-size:16px;"
         ></textarea>
@@ -698,6 +743,40 @@
     font-size: 12px;
   }
 
+  .ch-pulse {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #34d399;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .ch-pulse-stale {
+    color: #475569;
+  }
+
+  .pulse-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #34d399;
+    flex-shrink: 0;
+    animation: pulseDot 1.5s ease-in-out infinite;
+  }
+
+  .pulse-dot-stale {
+    background: #475569;
+    animation: none;
+  }
+
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+
   .empty-tip {
     text-align: center;
     padding: 40px 20px;
@@ -765,10 +844,11 @@
   .msg-list {
     flex: 1;
     overflow-y: auto;
-    padding: 12px 14px;
+    padding: 8px 10px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
+    -webkit-overflow-scrolling: touch;
   }
 
   .empty-chat {
@@ -797,10 +877,10 @@
   }
 
   .bubble {
-    max-width: 78%;
+    max-width: 88%;
     padding: 10px 14px;
     border-radius: 16px;
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.6;
     word-break: break-word;
   }
@@ -827,6 +907,7 @@
   .agent-content {
     flex: 1;
     min-width: 0;
+    max-width: 90%;
   }
 
   .agent-meta {
@@ -883,9 +964,10 @@
     border: 1px solid rgba(124,58,237,0.15);
     border-radius: 4px 14px 14px 14px;
     color: #E2E8F0;
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.7;
     word-break: break-word;
+    white-space: pre-wrap;
   }
 
   .stream-text { white-space: pre-wrap; }
@@ -939,12 +1021,13 @@
   }
 
   .input-area {
-    padding: 10px 14px;
+    padding: 8px 10px;
     border-top: 1px solid rgba(0,229,255,0.1);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
+    background: rgba(11,16,30,0.95);
   }
 
   .msg-input {
@@ -952,14 +1035,15 @@
     background: rgba(30,41,59,0.7);
     border: 1px solid rgba(0,229,255,0.2);
     border-radius: 10px;
-    padding: 10px 12px;
+    padding: 8px 12px;
     color: #F0F9FF;
     font-size: 16px;
     resize: none;
     outline: none;
-    line-height: 1.5;
+    line-height: 1.4;
     font-family: inherit;
-    min-height: 80px;
+    min-height: 40px;
+    max-height: 100px;
   }
 
   .msg-input::placeholder { color: #475569; }
@@ -967,7 +1051,7 @@
 
   .send-btn {
     width: 100%;
-    padding: 12px;
+    padding: 10px;
     border-radius: 8px;
     background: linear-gradient(135deg, rgba(0,229,255,0.2), rgba(0,229,255,0.1));
     border: 1px solid rgba(0,229,255,0.3);
@@ -975,7 +1059,7 @@
     font-size: 15px;
     font-weight: 600;
     cursor: pointer;
-    min-height: 44px;
+    min-height: 40px;
     transition: all 0.15s;
   }
 
